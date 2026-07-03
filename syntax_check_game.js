@@ -1,4 +1,3 @@
-
 (() => {
   "use strict";
 
@@ -2152,6 +2151,16 @@
     anchorFx.length = 0;
     initBoard();
     setMessage("待命出航", 1);
+  }
+
+  function dismissIntro() {
+    if (!showIntro || paused || state.gameOver) return false;
+    showIntro = false;
+    pointerDown = false;
+    pointerMode = "none";
+    state.charging = false;
+    state.power = 0;
+    return true;
   }
 
   function launchBall(power) {
@@ -4418,6 +4427,10 @@
     if (keys.has(c)) return;
     keys.add(c);
     ensureAudio();
+    if (showIntro && !paused && !state.gameOver) {
+      dismissIntro();
+      return;
+    }
     if (canNavigatorControl() && c === "Digit4") playNavigatorCard("guard");
     if (canNavigatorControl() && c === "Digit5") playNavigatorCard("ramp");
     if (canNavigatorControl() && c === "Digit6") playNavigatorCard("blast");
@@ -4454,8 +4467,9 @@
   }
 
   canvas.addEventListener("pointerdown", e => {
-    if (!canHelmControl()) return;
     ensureAudio();
+    if (dismissIntro()) return;
+    if (!canHelmControl()) return;
     pointerDown = true;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     const p = pointerPoint(e);
@@ -4568,6 +4582,7 @@
       reachBonus: anchorReachBonus(),
       totalBreakablePins: state.totalBreakablePins
     },
+    intro: { showIntro, started, paused },
     sea: {
       tideLevel: tideLevel(),
       stormLevel: stormLevel(),
@@ -4635,6 +4650,7 @@
     hitBoard: registerBoardHit,
     breakBoard,
     mp: MP,
+    dismissIntro,
     playCard: playNavigatorCard,
     setRole(role, connected = false) {
       MP.enabled = role !== "solo";

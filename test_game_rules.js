@@ -9,6 +9,8 @@ const scriptMatch = html.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
 assert(scriptMatch, "public/index.html should contain an inline game script");
 
 const noop = () => {};
+const canvasListeners = {};
+const windowListeners = {};
 const ctx = new Proxy({ imageSmoothingEnabled: false }, {
   get(target, prop) {
     if (prop in target) return target[prop];
@@ -29,7 +31,7 @@ const canvas = {
   width: 1280,
   height: 720,
   getContext: () => ctx,
-  addEventListener: noop,
+  addEventListener: (type, fn) => { canvasListeners[type] = fn; },
   setPointerCapture: noop,
   releasePointerCapture: noop,
   getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 })
@@ -63,7 +65,7 @@ global.document = {
 global.localStorage = { getItem: () => null, setItem: noop };
 global.performance = { now: () => 0 };
 global.location = { search: "", protocol: "http:", host: "localhost:8787" };
-global.addEventListener = noop;
+global.addEventListener = (type, fn) => { windowListeners[type] = fn; };
 global.requestAnimationFrame = () => 1;
 global.setTimeout = noop;
 global.AudioContext = function AudioContext() {};
@@ -88,6 +90,42 @@ function resetClean() {
   game.ball.y = 360;
   game.ball.vx = 0;
   game.ball.vy = 0;
+}
+
+function resetIntroReady(role = "solo", connected = false) {
+  game.setRole(role, connected);
+  game.reset();
+  game.boards.length = 0;
+  game.previews.length = 0;
+  game.state.navigatorMaterial = 8;
+  game.state.navigatorCooldown = 0;
+  game.state.charging = false;
+  game.state.power = 0;
+}
+
+function introVisible() {
+  return game.debug().intro.showIntro;
+}
+
+function pointerDown(x = 640, y = 360) {
+  assert(canvasListeners.pointerdown, "pointerdown listener should be registered");
+  canvasListeners.pointerdown({ clientX: x, clientY: y, pointerId: 1 });
+}
+
+function keyDown(code) {
+  assert(windowListeners.keydown, "keydown listener should be registered");
+  let prevented = false;
+  windowListeners.keydown({
+    code,
+    key: code,
+    preventDefault() { prevented = true; }
+  });
+  return prevented;
+}
+
+function keyUp(code) {
+  assert(windowListeners.keyup, "keyup listener should be registered");
+  windowListeners.keyup({ code, key: code });
 }
 
 resetClean();
@@ -129,6 +167,41 @@ const debug = game.debug();
 assert.strictEqual(debug.growth.scoreMultiplier, 1, "initial score multiplier should be 1");
 assert.strictEqual(debug.growth.reachBonus, 0, "initial anchor reach bonus should be 0");
 assert(debug.growth.totalBreakablePins > 0, "breakable pin count should be initialized");
+
+resetIntroReady();
+assert.strictEqual(introVisible(), true, "new runs should begin with the intro overlay visible");
+pointerDown();
+assert.strictEqual(introVisible(), false, "first pointer press should dismiss the intro overlay");
+assert.strictEqual(game.state.charging, false, "intro dismissal should not start charge");
+assert.strictEqual(game.ball.dead, true, "intro dismissal should not launch the ball");
+pointerDown();
+assert.strictEqual(game.state.charging, true, "second pointer press should start normal charging");
+assert(game.state.power >= 0.08, "normal charging should seed launch power after the intro is gone");
+
+resetIntroReady();
+assert.strictEqual(keyDown("Space"), true, "space should remain browser-blocked while dismissing the intro");
+assert.strictEqual(introVisible(), false, "first space press should dismiss the intro overlay");
+assert.strictEqual(game.state.charging, false, "first space press should not start charge");
+keyDown("Space");
+assert.strictEqual(game.state.charging, false, "space key repeat from the intro press should not start charge");
+keyUp("Space");
+assert.strictEqual(game.ball.dead, true, "releasing the intro-dismiss space press should not launch");
+keyDown("Space");
+assert.strictEqual(game.state.charging, true, "second space press should start charge normally");
+keyUp("Space");
+assert.strictEqual(game.ball.dead, false, "releasing the second space press should launch normally");
+
+resetIntroReady("navigator", true);
+game.mp.roles.helm = 1;
+assert.strictEqual(keyDown("Digit4"), true, "navigator card hotkey should be blocked from the browser");
+assert.strictEqual(introVisible(), false, "first navigator hotkey should dismiss the intro overlay");
+assert.strictEqual(game.mp.pendingCards.length, 0, "intro dismissal should not request a navigator card");
+keyDown("Digit4");
+assert.strictEqual(game.mp.pendingCards.length, 0, "navigator hotkey repeat from the intro press should not request a card");
+keyUp("Digit4");
+keyDown("Digit4");
+assert.strictEqual(game.mp.pendingCards.length, 1, "second navigator hotkey should request a card normally");
+keyUp("Digit4");
 
 resetClean();
 game.setRole("navigator", false);
