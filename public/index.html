@@ -1296,7 +1296,7 @@
   }
 
   function canNavigatorControl() {
-    return MP.enabled && MP.role === "navigator";
+    return MP.enabled && (MP.role === "navigator" || MP.role === "versus");
   }
 
   function canHelmControl() {
@@ -1378,9 +1378,24 @@
     const card = BOARD_CARDS[kind];
     if (!card) return false;
 
-    if (MP.enabled && MP.role === "navigator" && source === "local") {
+    if (MP.enabled && (MP.role === "navigator" || MP.role === "versus") && source === "local") {
+      if (!MP.connected) {
+        setMessage("中继未连接，无法布场", 0.85);
+        addFloat("未连接", FIELD.x + FIELD.w / 2, FIELD.y + 92, palette.gray, 14);
+        beep(130, 0.045, 0.016, "triangle");
+        return false;
+      }
+      if (!MP.roles.helm) {
+        setMessage("等待掌舵手进入房间", 0.85);
+        addFloat("等待掌舵手", FIELD.x + FIELD.w / 2, FIELD.y + 92, palette.gray, 14);
+        beep(130, 0.045, 0.016, "triangle");
+        return false;
+      }
       const cardId = `${MP.room}:${MP.role}:${++MP.cardSeq}`;
-      sendNet({ type: "play_card", kind, cardId });
+      if (!sendNet({ type: "play_card", kind, cardId })) {
+        setMessage("布场请求发送失败", 0.85);
+        return false;
+      }
       addPendingCard(cardId, kind);
       setMessage(`已请求布置：${card.coopName}`, 0.7);
       return true;
@@ -1503,6 +1518,7 @@
   }
 
   function updateBoardSystem(dt) {
+    if (!isGameAuthority()) return;
     state.navigatorCooldown = Math.max(0, state.navigatorCooldown - dt);
     if (state.freeAnchorTimer > 0) {
       state.freeAnchorTimer -= dt;
@@ -1979,8 +1995,9 @@
   }
 
   function sendNet(payload) {
-    if (!MP.enabled || !MP.ws || MP.ws.readyState !== WebSocket.OPEN) return;
+    if (!MP.enabled || !MP.ws || MP.ws.readyState !== WebSocket.OPEN) return false;
     MP.ws.send(JSON.stringify({ room: MP.room, role: MP.role, ...payload }));
+    return true;
   }
 
   function applyRoomState(msg) {
@@ -4767,6 +4784,17 @@
     updateBoards: updateBoardSystem,
     hitBoard: registerBoardHit,
     breakBoard,
+    mp: MP,
+    playCard: playNavigatorCard,
+    setRole(role, connected = false) {
+      MP.enabled = role !== "solo";
+      MP.role = role === "solo" ? "helm" : role;
+      MP.room = "test";
+      MP.connected = connected;
+      MP.roles = {};
+      MP.pendingCards.length = 0;
+      MP.ws = connected ? { readyState: WebSocket.OPEN, send() {} } : null;
+    },
     shortStrain(board, taut = 0.85) {
       const a = { x: board.x - board.w, y: board.y, taut, tautPeak: taut, boardHitKeys: [] };
       ball.dead = false;

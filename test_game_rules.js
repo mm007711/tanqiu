@@ -130,4 +130,29 @@ assert.strictEqual(debug.growth.scoreMultiplier, 1, "initial score multiplier sh
 assert.strictEqual(debug.growth.reachBonus, 0, "initial anchor reach bonus should be 0");
 assert(debug.growth.totalBreakablePins > 0, "breakable pin count should be initialized");
 
+resetClean();
+game.setRole("navigator", false);
+const offlineCard = game.playCard("guard");
+assert.strictEqual(offlineCard, false, "navigator should not report a card request while disconnected");
+assert.strictEqual(game.mp.pendingCards.length, 0, "disconnected navigator should not create pending cards");
+
+game.setRole("navigator", true);
+const noHelmCard = game.playCard("guard");
+assert.strictEqual(noHelmCard, false, "navigator should wait for a helm client before requesting cards");
+assert.strictEqual(game.mp.pendingCards.length, 0, "navigator waiting for helm should not create pending cards");
+
+game.mp.roles.helm = 1;
+const onlineCard = game.playCard("guard");
+assert.strictEqual(onlineCard, true, "connected navigator should be able to request a card");
+assert.strictEqual(game.boards.length, 0, "navigator request should not create local boards");
+assert.strictEqual(game.previews.length, 0, "navigator request should not create local previews");
+assert.strictEqual(game.mp.pendingCards.length, 1, "connected navigator should create one pending card");
+
+resetClean();
+const syncedBoard = game.makeBoard("guard", { expiresIn: 0.01, x: 420, y: 300 });
+game.setRole("navigator", true);
+game.updateBoards(1);
+assert(game.boards.includes(syncedBoard), "navigator client should not locally expire authoritative boards");
+game.setRole("solo", false);
+
 console.log("game rule checks ok");
