@@ -221,6 +221,29 @@ assert.strictEqual(game.boards.length, 0, "navigator request should not create l
 assert.strictEqual(game.previews.length, 0, "navigator request should not create local previews");
 assert.strictEqual(game.mp.pendingCards.length, 1, "connected navigator should create one pending card");
 
+resetIntroReady("helm", true);
+const remoteCard = game.playCard("guard", "nav-card-1");
+assert.strictEqual(remoteCard, true, "helm should execute a valid remote navigator card request");
+assert.strictEqual(game.previews.length, 1, "remote navigator card should create an authoritative board preview on helm");
+let sent = game.sentMessages();
+assert(sent.some(m => m.type === "card_result" && m.cardId === "nav-card-1" && m.accepted), "helm should acknowledge accepted remote card requests");
+assert(sent.some(m => m.type === "snapshot" && m.reason === "card" && m.snapshot.previews.length === 1), "helm should immediately publish a snapshot after accepting a remote card");
+game.updateBoards(game.constants.boardSpawnWarning + 0.01);
+assert.strictEqual(game.boards.length, 1, "accepted board preview should spawn into a real board after the warning window");
+
+resetIntroReady("navigator", true);
+game.applyRoomState({ count: 2, roles: { helm: 1, navigator: 1 }, ready: {}, readyAll: false, latestSnapshotId: 7 });
+const appliedSnapshot = game.applyNetworkSnapshotMessage({
+  type: "snapshot",
+  snapshotId: 7,
+  snapshot: {
+    ...game.snapshot(),
+    state: { ...game.snapshot().state, score: 4321 }
+  }
+});
+assert.strictEqual(appliedSnapshot, true, "navigator should still apply the real snapshot after room_state advertises its id");
+assert.strictEqual(game.state.score, 4321, "snapshot payload should update navigator state");
+
 resetClean();
 const syncedBoard = game.makeBoard("guard", { expiresIn: 0.01, x: 420, y: 300 });
 game.setRole("navigator", true);

@@ -1377,6 +1377,7 @@
   function playNavigatorCard(kind, source = "local") {
     const card = BOARD_CARDS[kind];
     if (!card) return false;
+    const remoteRequest = source && source !== "local" && source !== "remote";
 
     if (MP.enabled && (MP.role === "navigator" || MP.role === "versus") && source === "local") {
       if (!MP.connected) {
@@ -1401,7 +1402,7 @@
       return true;
     }
 
-    if (source && source !== "local" && source !== "remote") {
+    if (remoteRequest) {
       if (MP.seenCards.includes(source)) return false;
       MP.seenCards.push(source);
       if (MP.seenCards.length > 80) MP.seenCards.splice(0, MP.seenCards.length - 80);
@@ -1411,7 +1412,7 @@
 
     const rejectReason = rejectReasonForCard(card);
     if (rejectReason) {
-      if (source && source !== "local" && source !== "remote") {
+      if (remoteRequest) {
         sendNet({ type: "card_result", cardId: source, kind, accepted: false, reason: rejectReason, material: state.navigatorMaterial });
       }
       setMessage(rejectReason === "冷却中" ? "布场冷却中" : rejectReason === "航障已满" ? "同屏航障已满" : rejectReason, 0.7);
@@ -1439,9 +1440,10 @@
     addRing(spec.x, spec.y, Math.max(card.w, card.h) * 0.45, card.accent, 0.24);
     beep(360 + card.cost * 90, 0.045, 0.02, "square");
     sendNet({ type: "event", event: "card_accepted", kind, material: state.navigatorMaterial });
-    if (source && source !== "local" && source !== "remote") {
+    if (remoteRequest) {
       sendNet({ type: "card_result", cardId: source, kind, accepted: true, reason: "已布置", material: state.navigatorMaterial });
     }
+    sendAuthoritativeSnapshot("card");
     return true;
   }
 
@@ -1994,10 +1996,23 @@
     }
   }
 
+  function applyNetworkSnapshotMessage(msg) {
+    if (!msg || !msg.snapshot) return false;
+    if (msg.snapshotId && msg.snapshotId <= MP.lastSnapshotId && msg.reason !== "request") return false;
+    MP.lastSnapshotId = Math.max(MP.lastSnapshotId, Number(msg.snapshotId || 0));
+    applySnapshot(msg.snapshot);
+    return true;
+  }
+
   function sendNet(payload) {
     if (!MP.enabled || !MP.ws || MP.ws.readyState !== WebSocket.OPEN) return false;
     MP.ws.send(JSON.stringify({ room: MP.room, role: MP.role, ...payload }));
     return true;
+  }
+
+  function sendAuthoritativeSnapshot(reason = "") {
+    if (!MP.enabled || !MP.connected || MP.role !== "helm") return false;
+    return sendNet({ type: "snapshot", snapshot: snapshotGame(), snapshotId: ++MP.snapshotSeq, reason });
   }
 
   function applyRoomState(msg) {
@@ -2009,7 +2024,6 @@
     const helm = MP.roles.helm ? "掌舵在线" : "等掌舵";
     const nav = MP.roles.navigator ? "航海士在线" : "等航海士";
     MP.status = `${helm} · ${nav}`;
-    if (msg.latestSnapshotId) MP.lastSnapshotId = Math.max(MP.lastSnapshotId, msg.latestSnapshotId);
   }
 
   function toggleReady() {
@@ -2130,11 +2144,9 @@
         } else if (msg.type === "card_result" && (MP.role === "navigator" || MP.role === "versus")) {
           updateCardResult(msg.cardId, msg.kind, msg.accepted, msg.reason, msg.material);
         } else if (msg.type === "snapshot" && MP.role !== "helm") {
-          if (msg.snapshotId && msg.snapshotId <= MP.lastSnapshotId && msg.reason !== "request") return;
-          MP.lastSnapshotId = Math.max(MP.lastSnapshotId, Number(msg.snapshotId || 0));
-          applySnapshot(msg.snapshot);
+          applyNetworkSnapshotMessage(msg);
         } else if (msg.type === "request_snapshot" && MP.role === "helm") {
-          sendNet({ type: "snapshot", snapshot: snapshotGame(), snapshotId: ++MP.snapshotSeq });
+          sendAuthoritativeSnapshot("request");
         } else if (msg.type === "event") {
           // 轻量事件目前只作为状态提示使用，快照负责最终同步。
           if (msg.event === "card_accepted") setMessage("掌舵端已执行布场", 0.55);
@@ -2159,7 +2171,7 @@
         MP.lastSnapshot += dt;
         if (MP.lastSnapshot >= MP.snapshotEvery) {
           MP.lastSnapshot = 0;
-        sendNet({ type: "snapshot", snapshot: snapshotGame(), snapshotId: ++MP.snapshotSeq });
+        sendAuthoritativeSnapshot("tick");
       }
     }
     for (let i = MP.pendingCards.length - 1; i >= 0; i--) {
@@ -4754,6 +4766,7 @@
     reset: resetRun,
     constants: {
       boardLimit: BOARD_LIMIT,
+      boardSpawnWarning: BOARD_SPAWN_WARNING,
       boardExpireGrace: BOARD_EXPIRE_GRACE,
       boardHitWindow: BOARD_HIT_WINDOW
     },
@@ -4803,6 +4816,12 @@
     mp: MP,
     dismissIntro,
     playCard: playNavigatorCard,
+    snapshot: snapshotGame,
+    applyRoomState,
+    applyNetworkSnapshotMessage,
+    sentMessages() {
+      return MP.ws && Array.isArray(MP.ws.sent) ? MP.ws.sent.map(raw => JSON.parse(raw)) : [];
+    },
     setRole(role, connected = false) {
       MP.enabled = role !== "solo";
       MP.role = role === "solo" ? "helm" : role;
@@ -4810,7 +4829,7 @@
       MP.connected = connected;
       MP.roles = {};
       MP.pendingCards.length = 0;
-      MP.ws = connected ? { readyState: WebSocket.OPEN, send() {} } : null;
+      MP.ws = connected ? { readyState: WebSocket.OPEN, sent: [], send(raw) { this.sent.push(raw); } } : null;
     },
     shortStrain(board, taut = 0.85) {
       const a = { x: board.x - board.w, y: board.y, taut, tautPeak: taut, boardHitKeys: [] };
