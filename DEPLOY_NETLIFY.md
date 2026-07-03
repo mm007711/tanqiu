@@ -59,7 +59,7 @@ ALLOWED_ORIGINS=https://你的-netlify-站点,https://其他允许来源
 部署成功后，你需要拿到一个 WebSocket 地址：
 
 ```text
-wss://你的中继域名/ws
+wss://tanqiu.onrender.com/ws
 ```
 
 本地测试时则是：
@@ -73,7 +73,7 @@ ws://localhost:8787/ws
 打开 Netlify 页面后，在主菜单的“中继地址”里填入：
 
 ```text
-wss://你的中继域名/ws
+wss://tanqiu.onrender.com/ws
 ```
 
 然后两个玩家输入同一个房间名：
@@ -84,8 +84,8 @@ wss://你的中继域名/ws
 也可以直接用 URL 参数：
 
 ```text
-https://zesty-speculoos-853237.netlify.app/?room=test&role=helm&relay=wss%3A%2F%2F你的中继域名%2Fws
-https://zesty-speculoos-853237.netlify.app/?room=test&role=navigator&relay=wss%3A%2F%2F你的中继域名%2Fws
+https://zesty-speculoos-853237.netlify.app/?room=test&role=helm&relay=wss%3A%2F%2Ftanqiu.onrender.com%2Fws
+https://zesty-speculoos-853237.netlify.app/?room=test&role=navigator&relay=wss%3A%2F%2Ftanqiu.onrender.com%2Fws
 ```
 
 ## 4. 检查命令
