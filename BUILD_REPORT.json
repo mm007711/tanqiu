@@ -1,0 +1,14 @@
+{
+  "checks": {
+    "index_exists": true,
+    "server_exists": true,
+    "package_exists": true,
+    "contains_board_cards": true,
+    "contains_websocket": true,
+    "contains_free_anchor": true,
+    "contains_drift_boards": true,
+    "node_syntax_ok": true
+  },
+  "node_stderr": "",
+  "node_stdout": ""
+}

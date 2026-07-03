@@ -1,0 +1,14 @@
+{
+  "name": "anchor-maiden-multiplayer-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Anchor Maiden Pachinko prototype with navigator board placement, fracture points, free anchor reward, and WebSocket room relay.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check syntax_check_game.js && node --check server.js && node test_game_rules.js && node test_multiplayer_relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

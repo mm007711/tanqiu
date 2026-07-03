@@ -1,0 +1,4647 @@
+
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  const modeMenu = document.getElementById("modeMenu");
+  const roomInput = document.getElementById("roomInput");
+  const relayInput = document.getElementById("relayInput");
+  const roomLinks = document.getElementById("roomLinks");
+  const soloBtn = document.getElementById("soloBtn");
+  const helmBtn = document.getElementById("helmBtn");
+  const navigatorBtn = document.getElementById("navigatorBtn");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const TAU = Math.PI * 2;
+
+  const CAB = { x: 28, y: 20, w: 1224, h: 680 };
+  const FIELD = { x: 58, y: 58, w: 820, h: 610 };
+  FIELD.r = FIELD.x + FIELD.w;
+  FIELD.b = FIELD.y + FIELD.h;
+  const PANEL = { x: 910, y: 58, w: 296, h: 610 };
+  const LANE_X = FIELD.r - 42;
+
+  const palette = {
+    black: "#070707",
+    ink: "#141414",
+    deep: "#1f2c31",
+    sea: "#4a7c89",
+    foam: "#f6f7ee",
+    paper: "#e8eadb",
+    brass: "#c8aa63",
+    coral: "#d46b5b",
+    blue: "#86d7ec",
+    gray: "#8d958e",
+    red: "#ee5c5c"
+  };
+
+  const keys = new Set();
+  let pointerDown = false;
+  let pointerMode = "none";
+  let lastTime = performance.now();
+  let acc = 0;
+  let started = false;
+  let paused = false;
+  let showIntro = true;
+  let soundEnabled = true;
+  let audioCtx = null;
+
+  const state = {
+    score: 0,
+    displayScore: 0,
+    high: Number(localStorage.getItem("anchor_maiden_proto_high") || 0),
+    target: 72000,
+    ballsLeft: 16,
+    heat: 10,
+    tide: 0,
+    tideTimer: 0,
+    combo: 0,
+    comboTimer: 0,
+    power: 0,
+    chargeDir: 1,
+    charging: false,
+    launchCooldown: 0,
+    anchorEnergy: 100,
+    anchorCooldown: 0,
+    anchorUses: 0,
+    anchorMode: "SHORT",
+    anchorAim: false,
+    anchorAimTarget: null,
+    anchorAimQuality: 0,
+    anchorSnapStrength: 0,
+    perfectAnchorStreak: 0,
+    lastAnchorQuality: "",
+    brokenPins: 0,
+    totalBreakablePins: 1,
+    modeFlash: 0,
+    lastAnchorMode: "SHORT",
+    aimX: FIELD.x + FIELD.w * 0.5,
+    aimY: FIELD.y + FIELD.h * 0.45,
+    wave: 1,
+    shake: 0,
+    phase: 0,
+    glass: 0,
+    message: "待命出航",
+    messageTimer: 0,
+    seaOffsetX: 0,
+    seaOffsetY: 0,
+    seaRoll: 0,
+    seaCurrentX: 0,
+    seaLift: 0,
+    stormPulse: 0,
+    gameOver: false,
+    won: false,
+
+    // 航海士 / 海妖布场系统
+    navigatorMaterial: 3,
+    navigatorMaterialMax: 8,
+    navigatorCooldown: 0,
+    navigatorComboGrant: 0,
+    freeAnchorCharges: 0,
+    freeAnchorTimer: 0,
+    boardSeq: 0,
+    boardHintTimer: 0,
+    netStatus: "本地双人",
+    netPeers: 0
+  };
+
+  const ANCHOR_TYPES = {
+    SHORT: {
+      key: "SHORT",
+      label: "短链",
+      cost: 24,
+      range: 176,
+      cone: 44,
+      snap: 54,
+      minLen: 42,
+      maxLen: 136,
+      life: 1.15,
+      pull: 520,
+      stretch: 16,
+      slack: 22,
+      ropeDamping: 7.5,
+      ropeConstraint: 0.58,
+      tangent: 92,
+      releaseBoost: 300,
+      autoReleaseBoost: 180,
+      speedScale: 0.22,
+      speedBonusMax: 140,
+      radialBoost: 22,
+      radialBoostY: 20,
+      heatRate: 1.6,
+      recoil: 0.24,
+      lockScore: 160,
+      tautScore: 520,
+      stats: ["ROPE 42-136  SLACK 22", "SLING 300 + SPEED"],
+      color: palette.blue
+    },
+    HEAVY: {
+      key: "HEAVY",
+      label: "重锚",
+      cost: 50,
+      range: 236,
+      cone: 52,
+      minLen: 54,
+      maxLen: 170,
+      life: 0.72,
+      pull: 980,
+      stretch: 15,
+      tangent: 6,
+      releaseBoost: 80,
+      autoReleaseBoost: 60,
+      speedScale: 0.06,
+      speedBonusMax: 42,
+      radialBoost: 16,
+      radialBoostY: 10,
+      heatRate: 6,
+      recoil: 0.82,
+      lockScore: 460,
+      blastRadius: 86,
+      hookBrake: 0.42,
+      hookImpulse: 380,
+      pinDamage: 1,
+      pinBreakScore: 240,
+      pinCrackScore: 90,
+      stats: ["IRON HOOK 0.72s  BLAST 86", "BREAK PIN x1 / BRASS x2"],
+      color: palette.brass
+    },
+    RETURN: {
+      key: "RETURN",
+      label: "回航锚",
+      cost: 54,
+      range: 260,
+      cone: 74,
+      minLen: 66,
+      maxLen: 220,
+      life: 1.15,
+      pull: 720,
+      stretch: 9.4,
+      tangent: 8,
+      releaseBoost: 120,
+      autoReleaseBoost: 100,
+      speedScale: 0.08,
+      speedBonusMax: 55,
+      radialBoost: 30,
+      radialBoostY: 120,
+      heatRate: 3.0,
+      recoil: 0.95,
+      lockScore: 260,
+      virtualTarget: true,
+      virtualDistance: 205,
+      stats: ["RETURN POINT 205  ROPE 66-220", "RESCUE LIFT 120"],
+      color: palette.foam
+    }
+  };
+
+  const maiden = {
+    name: "锚链水手",
+    title: "Anchor Sailor",
+    skill: "抛锚回旋",
+    mood: "航线稳定",
+    quote: "把命运钩住，再顺着潮汐甩出去。",
+    blink: 0
+  };
+
+  const ball = {
+    x: LANE_X,
+    y: FIELD.b - 34,
+    vx: 0,
+    vy: 0,
+    r: 10,
+    inLane: true,
+    dead: true,
+    anchor: null,
+    trail: [],
+    age: 0,
+    sweet: false
+  };
+
+  const pins = [];
+  const bumpers = [];
+  const pockets = [];
+  const rails = [];
+  const particles = [];
+  const floats = [];
+  const rings = [];
+  const anchors = [];
+  const anchorFx = [];
+  const waterCache = { deep: null, field: null };
+  const ripples = [];
+  const waterAnim = { frame: 0, timer: 0 };
+
+  // ---------------------------------------------------------------------------
+  // 航海士布场 + 漂流封板 + 压裂点 + 联机同步
+  // ---------------------------------------------------------------------------
+  const driftBoards = [];
+  const boardPreviews = [];
+
+  const BOARD_LIMIT = 3;
+  const BOARD_HIT_WINDOW = 2.5;
+  const BOARD_HIT_COOLDOWN = 0.18;
+  const BOARD_SPAWN_WARNING = 0.45;
+  const BOARD_EXPIRE_GRACE = 1.2;
+
+  const BOARD_CARDS = {
+    guard: {
+      key: "guard",
+      coopName: "临时护航",
+      versusName: "脆裂护板",
+      label: "护航木板",
+      cost: 2,
+      w: 134,
+      h: 18,
+      hp: 3,
+      crack: 2,
+      breakAt: 4,
+      life: 10,
+      score: 1800,
+      color: "#b78951",
+      accent: "#86d7ec",
+      hint: "挡住危险落点，适合救球续航"
+    },
+    ramp: {
+      key: "ramp",
+      coopName: "导流斜架",
+      versusName: "错航导板",
+      label: "导流斜板",
+      cost: 2,
+      w: 132,
+      h: 16,
+      hp: 4,
+      crack: 3,
+      breakAt: 5,
+      life: 8,
+      score: 2500,
+      color: "#a67545",
+      accent: "#c8aa63",
+      hint: "改变反弹角度，制造刷分航线"
+    },
+    blast: {
+      key: "blast",
+      coopName: "破障爆板",
+      versusName: "诱爆残板",
+      label: "爆裂木板",
+      cost: 3,
+      w: 104,
+      h: 22,
+      hp: 3,
+      crack: 2,
+      breakAt: 3,
+      life: 12,
+      score: 3800,
+      color: "#73513b",
+      accent: "#d46b5b",
+      hint: "重锚命中会直接引爆并清障"
+    },
+    block: {
+      key: "block",
+      coopName: "航道调度",
+      versusName: "封港警报",
+      label: "封港木板",
+      cost: 3,
+      w: 108,
+      h: 18,
+      hp: 5,
+      crack: 3,
+      breakAt: 5,
+      life: 12,
+      score: 3000,
+      color: "#86613d",
+      accent: "#ee5c5c",
+      hint: "临时封住口袋入口，改变目标优先级"
+    }
+  };
+
+  const MP = {
+    enabled: false,
+    role: "helm",
+    room: "",
+    relayUrl: "",
+    ws: null,
+    status: "本地双人",
+    peers: 0,
+    roles: {},
+    ready: {},
+    readyLocal: false,
+    readyAll: false,
+    connected: false,
+    cardSeq: 0,
+    seenCards: [],
+    pendingCards: [],
+    lastCardResult: "",
+    snapshotSeq: 0,
+    lastSnapshotId: 0,
+    lastSnapshot: 0,
+    snapshotEvery: 0.12,
+    reconnectTimer: 0,
+    reconnectDelay: 1.4
+  };
+
+
+  const MAX_PARTICLES = 220;
+  const MAX_FLOATS = 48;
+  const MAX_RINGS = 72;
+  const pixelSprites = {
+    maidenBust: [
+      "....................",
+      "......WWWWWW........",
+      "....WWWWWWWWWW......",
+      "....WBBBBBBBBBW.....",
+      "...WBBSSSSSSSSBW....",
+      "...WBSSSSSSSSSSBW...",
+      "...WBSSSESSSESSBW...",
+      "..WBSSSSSSSSSSSSBW..",
+      "..WBBSSSSSSSSSSBBW..",
+      "..WBBBBBSSSSBBBBBW..",
+      "..WWWWRAAAAARRWWW...",
+      "...WRAAAAAAAAAARW...",
+      "...WRAAAKKKKAAARW...",
+      "....WAAAWWWWAAAW....",
+      ".....WAAWWWWAAW.....",
+      ".....WAAWWWWAAW.....",
+      "......WW....WW......",
+      "...................."
+    ],
+    maidenMini: [
+      "....WWWW....",
+      "...WBBBBW...",
+      "..WBSSSSBW..",
+      "..WBSEESBW..",
+      "..WBBSSBBW..",
+      "..WRAAAARW..",
+      "...WAAAAW...",
+      "....WAAW....",
+      ".....WW....."
+    ],
+    anchorShort: [
+      "...A....",
+      "..AAA...",
+      "...A....",
+      "...A....",
+      "AAAAAAA.",
+      ".A...A..",
+      "AA...AA.",
+      "........"
+    ],
+    anchorHeavy: [
+      "...A....",
+      "..AAA...",
+      "...A....",
+      "..AAA...",
+      "AAAAAAA.",
+      "AA...AA.",
+      "AA...AA.",
+      "........"
+    ],
+    anchorReturn: [
+      "...A....",
+      "..AAA...",
+      ".AA.AA..",
+      "...A....",
+      "AAAAAAA.",
+      ".A...A..",
+      "AA...AA.",
+      "........"
+    ],
+    pinBlack: [
+      "..OO..",
+      ".OKKO.",
+      "OKKKKO",
+      "OKKKKO",
+      ".OKKO.",
+      "..OO.."
+    ],
+    pinBrass: [
+      "..OO..",
+      ".OAAO.",
+      "OAAAAO",
+      "OAAAAO",
+      ".OAAO.",
+      "..OO.."
+    ],
+    pinTide: [
+      "..OO..",
+      ".OAAO.",
+      "OABBAO",
+      "OABBAO",
+      ".OAAO.",
+      "..OO.."
+    ],
+    pinAnchor: [
+      "..OO..",
+      ".OWWO.",
+      "OWAAWO",
+      "OWAAWO",
+      ".OWWO.",
+      "..OO.."
+    ],
+    buoyBumper: [
+      "...OOOOOO...",
+      "..OAAAAAAO..",
+      ".OAAWWWWAAO.",
+      "OAAWKKKKWAAO",
+      "OAAWKAAKWAAO",
+      "OAAWKKKKWAAO",
+      ".OAAWWWWAAO.",
+      "..OAAAAAAO..",
+      "...OOOOOO..."
+    ],
+    pocketSupply: [
+      "..OOOOOOOO..",
+      ".OWWWWWWWWO.",
+      "OWWKKKKKKWWO",
+      "OWKWWWWWWKWO",
+      "OWKWWKKWWKWO",
+      "OWKWWKKWWKWO",
+      "OWKWWWWWWKWO",
+      "OWWKKKKKKWWO",
+      ".OWWWWWWWWO.",
+      "..OOOOOOOO.."
+    ],
+    pocketAnchor: [
+      "..OOOOOOOO..",
+      ".OAAAAAAAAO.",
+      "OAAKKKKKKAAO",
+      "OAAKWWWWKAAO",
+      "OAAKWAAWKAAO",
+      "OAAKWAAWKAAO",
+      "OAAKWWWWKAAO",
+      "OAAKKKKKKAAO",
+      ".OAAAAAAAAO.",
+      "..OOOOOOOO.."
+    ],
+    pocketStorm: [
+      "..OOOOOOOO..",
+      ".ORRRRRRRRO.",
+      "ORRKKKKKKRRO",
+      "ORKRWWWWRKRO",
+      "ORKWKKKKWKRO",
+      "ORKWKKKKWKRO",
+      "ORKRWWWWRKRO",
+      "ORRKKKKKKRRO",
+      ".ORRRRRRRRO.",
+      "..OOOOOOOO.."
+    ],
+    hookShort: [
+      "....OOO.....",
+      "...OAAAOO...",
+      "..OAWWAAO...",
+      ".OAW..WAAO..",
+      "OAW....WAAO.",
+      "OA......AAO.",
+      "OAW....WAAO.",
+      ".OAW..WAAO..",
+      "..OAWWAAO...",
+      "...OAAAOO...",
+      "....OOO....."
+    ],
+    hookHeavy: [
+      "...OOOOO....",
+      "..OAAAAAO...",
+      ".OAAKKAAO...",
+      "OAAKWWKAAO..",
+      "OAAKWWKAAAO.",
+      "OAAKKKKAAAO.",
+      "OAAKWWKAAAO.",
+      "OAAKWWKAAO..",
+      ".OAAKKAAO...",
+      "..OAAAAAO...",
+      "...OOOOO...."
+    ],
+    hookReturn: [
+      "....OOO.....",
+      "..OOAAAOO...",
+      ".OAAWAWAAO..",
+      "OAAW...WAAO.",
+      "OAW..A..WAO.",
+      "OA..AAA..AO.",
+      "OAW..A..WAO.",
+      "OAAW...WAAO.",
+      ".OAAWAWAAO..",
+      "..OOAAAOO...",
+      "....OOO....."
+    ]
+  };
+
+  function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  }
+
+  function rnd(a, b) {
+    return a + Math.random() * (b - a);
+  }
+
+  function dist(x1, y1, x2, y2) {
+    return Math.hypot(x1 - x2, y1 - y2);
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function smoothstep(t) {
+    return t * t * (3 - 2 * t);
+  }
+
+  function hash2(x, y, seed = 0) {
+    let n = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed | 0, 1442695041);
+    n = (n ^ (n >>> 13)) | 0;
+    n = Math.imul(n, 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+  }
+
+  function valueNoise(x, y, seed = 0) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const xf = smoothstep(x - xi);
+    const yf = smoothstep(y - yi);
+    const a = hash2(xi, yi, seed);
+    const b = hash2(xi + 1, yi, seed);
+    const c = hash2(xi, yi + 1, seed);
+    const d = hash2(xi + 1, yi + 1, seed);
+    return lerp(lerp(a, b, xf), lerp(c, d, xf), yf);
+  }
+
+  function chance(p) {
+    return Math.random() < p;
+  }
+
+  function px(x, y, w, h, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  }
+
+  function rect(x, y, w, h, fill, stroke = palette.black, lw = 2) {
+    if (fill) px(x, y, w, h, fill);
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw;
+      ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(w), Math.round(h));
+    }
+  }
+
+  function line(x1, y1, x2, y2, c = palette.black, lw = 2) {
+    ctx.strokeStyle = c;
+    ctx.lineWidth = lw;
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x1) + 0.5, Math.round(y1) + 0.5);
+    ctx.lineTo(Math.round(x2) + 0.5, Math.round(y2) + 0.5);
+    ctx.stroke();
+  }
+
+  function circle(x, y, r, fill, stroke = palette.black, lw = 2) {
+    ctx.beginPath();
+    ctx.arc(Math.round(x), Math.round(y), r, 0, TAU);
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    }
+  }
+
+  function arc(x, y, r, a1, a2, c, lw = 2) {
+    ctx.strokeStyle = c;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.arc(Math.round(x), Math.round(y), r, a1, a2);
+    ctx.stroke();
+  }
+
+  function text(s, x, y, size = 16, fill = palette.black, align = "left", weight = 800) {
+    ctx.fillStyle = fill;
+    ctx.font = `${weight} ${size}px "Microsoft YaHei", "PingFang SC", ui-monospace, Menlo, Consolas, monospace`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "top";
+    ctx.fillText(String(s), Math.round(x), Math.round(y));
+  }
+
+  function outlineText(s, x, y, size = 16, fill = palette.foam, align = "left") {
+    ctx.font = `900 ${size}px "Microsoft YaHei", "PingFang SC", ui-monospace, Menlo, Consolas, monospace`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "top";
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = palette.black;
+    ctx.strokeText(String(s), Math.round(x), Math.round(y));
+    ctx.fillStyle = fill;
+    ctx.fillText(String(s), Math.round(x), Math.round(y));
+  }
+
+  function wrapped(s, x, y, maxW, size = 14, fill = palette.black, align = "left") {
+    const chars = String(s).split("");
+    let lineText = "";
+    let yy = y;
+    ctx.font = `800 ${size}px "Microsoft YaHei", "PingFang SC", ui-monospace, Menlo, Consolas, monospace`;
+    for (const ch of chars) {
+      const candidate = lineText + ch;
+      if (ctx.measureText(candidate).width > maxW && lineText) {
+        text(lineText, x, yy, size, fill, align, 800);
+        lineText = ch;
+        yy += size + 6;
+      } else {
+        lineText = candidate;
+      }
+    }
+    if (lineText) text(lineText, x, yy, size, fill, align, 800);
+    return yy + size;
+  }
+
+
+  function drawPixelSprite(sprite, x, y, scale, colorMap, replacements = {}) {
+    const paletteMap = { ...colorMap, ...replacements };
+    for (let row = 0; row < sprite.length; row++) {
+      const lineData = sprite[row];
+      for (let col = 0; col < lineData.length; col++) {
+        const token = lineData[col];
+        if (token === ".") continue;
+        const color = paletteMap[token];
+        if (!color) continue;
+        px(x + col * scale, y + row * scale, scale, scale, color);
+      }
+    }
+  }
+
+  function drawPixelSpriteCentered(sprite, x, y, scale, colorMap) {
+    const w = sprite[0].length * scale;
+    const h = sprite.length * scale;
+    drawPixelSprite(sprite, Math.round(x - w / 2), Math.round(y - h / 2), scale, colorMap);
+  }
+
+  function drawPixelSpriteRotated(sprite, x, y, scale, angle, colorMap) {
+    ctx.save();
+    ctx.translate(Math.round(x), Math.round(y));
+    ctx.rotate(angle);
+    drawPixelSpriteCentered(sprite, 0, 0, scale, colorMap);
+    ctx.restore();
+  }
+
+  function spriteMap(accent = palette.blue, ghost = false) {
+    return {
+      W: ghost ? "rgba(246,247,238,0.35)" : palette.foam,
+      B: ghost ? "rgba(38,53,61,0.35)" : "#26353d",
+      S: ghost ? "rgba(247,223,200,0.35)" : "#f7dfc8",
+      E: ghost ? "rgba(7,7,7,0.25)" : palette.black,
+      R: ghost ? "rgba(212,107,91,0.35)" : palette.coral,
+      A: ghost ? "rgba(134,215,236,0.30)" : accent,
+      K: ghost ? "rgba(23,37,42,0.3)" : "#17252a"
+    };
+  }
+
+  function facilitySpriteMap(accent = palette.brass, fill = palette.foam) {
+    return {
+      O: palette.black,
+      K: "#10181b",
+      W: palette.foam,
+      A: accent,
+      B: palette.blue,
+      R: palette.coral,
+      F: fill
+    };
+  }
+
+  function pxDiamond(x, y, r, color) {
+    for (let yy = -r; yy <= r; yy++) {
+      const span = r - Math.abs(yy);
+      px(x - span, y + yy, span * 2 + 1, 1, color);
+    }
+  }
+
+  function addWaterRipple(x, y, strength = 1) {
+    ripples.push({ x, y, r: 8, life: 0.72, max: 0.72, strength });
+    if (ripples.length > 36) ripples.splice(0, ripples.length - 36);
+  }
+
+  function updateRipples(dt) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      ripples[i].life -= dt;
+      if (ripples[i].life <= 0) ripples.splice(i, 1);
+    }
+  }
+
+  function waveStroke(x1, y1, x2, y2, amp, color, lw) {
+    const mx = (x1 + x2) * 0.5;
+    const my = (y1 + y2) * 0.5 + Math.sin(state.phase * 0.92 + y1 * 0.022) * amp;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x1) + 0.5, Math.round(y1) + 0.5);
+    ctx.quadraticCurveTo(Math.round(mx) + 0.5, Math.round(my) + 0.5, Math.round(x2) + 0.5, Math.round(y2) + 0.5);
+    ctx.stroke();
+  }
+
+  function drawFieldDepthGradient() {
+    const g = ctx.createLinearGradient(FIELD.x, FIELD.y, FIELD.x, FIELD.b);
+    g.addColorStop(0, "rgba(255,255,255,0.08)");
+    g.addColorStop(0.35, "rgba(20,88,92,0.04)");
+    g.addColorStop(0.72, "rgba(0,45,58,0.16)");
+    g.addColorStop(1, "rgba(0,12,18,0.30)");
+    ctx.fillStyle = g;
+    ctx.fillRect(FIELD.x + 4, FIELD.y + 4, FIELD.w - 8, FIELD.h - 8);
+  }
+
+  function drawWaterRipples() {
+    for (const r of ripples) {
+      const t = 1 - r.life / r.max;
+      ctx.globalAlpha = (r.life / r.max) * 0.34;
+      arc(r.x, r.y, r.r + t * 42 * r.strength, 0, TAU, palette.foam, 2);
+      ctx.globalAlpha = (r.life / r.max) * 0.18;
+      arc(r.x, r.y, r.r + t * 24 * r.strength, 0, TAU, palette.blue, 1);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawResourceBar(x, y, w, h, label, pct, color, statusText = "") {
+    rect(x, y, w, h, "#17252a", palette.black, 2);
+    text(label, x + 12, y + 9, 12, "#cfd7d1", "left");
+    if (statusText) text(statusText, x + w - 12, y + 9, 10, color, "right");
+    px(x + 12, y + 28, w - 24, 12, "#344145");
+    px(x + 12, y + 28, Math.round((w - 24) * clamp(pct, 0, 1)), 12, color);
+  }
+
+  function drawMiniBar(x, y, w, label, pct, color, active = false) {
+    text(label, x, y, 11, active ? color : palette.foam, "left");
+    px(x + 46, y + 3, w - 46, 8, "#344145");
+    px(x + 46, y + 3, Math.round((w - 46) * clamp(pct, 0, 1)), 8, active ? palette.foam : color);
+    text(String(Math.round(pct * 100)).padStart(3, " ") + "%", x + w, y - 2, 10, "#cfd7d1", "right");
+  }
+
+  function drawModeChip(x, y, key, active) {
+    const type = ANCHOR_TYPES[key];
+    const icon = key === "SHORT" ? pixelSprites.anchorShort : key === "HEAVY" ? pixelSprites.anchorHeavy : pixelSprites.anchorReturn;
+    rect(x, y, 82, 28, active ? "#22343a" : "#17252a", active ? type.color : palette.black, 2);
+    drawPixelSprite(icon, x + 6, y + 6, 2, { A: active ? type.color : "#63757b" });
+    text(type.label, x + 28, y + 7, 11, active ? type.color : palette.foam, "left");
+  }
+
+  function anchorStatusLabel(type) {
+    if (ball.anchor) return "已锁定";
+    if (state.anchorCooldown > 0) return "冷却中";
+    if (state.anchorEnergy < type.cost) return "能量不足";
+    return "可抛锚";
+  }
+
+  function modeLabel(key = state.anchorMode) {
+    if (key === "SHORT") return "短链";
+    if (key === "HEAVY") return "重锚";
+    if (key === "RETURN") return "回航锚";
+    return "短链";
+  }
+
+  function readableAnchorStatus(type) {
+    if (ball.anchor) return "已挂锚";
+    if (state.anchorAim) return "瞄准中";
+    if (state.anchorCooldown > 0) return "冷却中";
+    if (state.anchorEnergy < type.cost) return "能量不足";
+    return "可抛锚";
+  }
+
+  function readableBallStatus() {
+    if (ball.dead) return "待发射";
+    if (ball.anchor) return "锚链牵引";
+    if (state.anchorAim) return "子弹时间";
+    if (ball.inLane) return "发射槽";
+    return "航行中";
+  }
+
+  function skillHintText(type) {
+    if (ball.anchor) return "拉紧时松开 X：甩链加速";
+    if (state.anchorAim) {
+      const q = Math.round((state.anchorAimQuality || 0) * 100);
+      return q >= 82 ? "完美锚点：松开 X 抛锚" : q >= 58 ? "有效锚点：可抛锚" : "移动准星寻找亮起锚点";
+    }
+    if (state.anchorEnergy < type.cost) return "收集能量后可用";
+    if (type.key === "SHORT") return "短链：近点吸附，拉紧后甩出";
+    if (type.key === "HEAVY") return "重锚：锁定钉群，爆破开路";
+    return "回航锚：远距救球，向上拉回";
+  }
+
+  function panelCard(x, y, w, h, title = "") {
+    rect(x, y, w, h, "#17252a", palette.black, 2);
+    ctx.globalAlpha = 0.42;
+    line(x + 8, y + 1, x + w - 8, y + 1, palette.foam, 1);
+    ctx.globalAlpha = 1;
+    if (title) text(title, x + 12, y + 9, 11, "#cfd7d1", "left");
+  }
+
+  function drawModeChipV2(x, y, key, active) {
+    const type = ANCHOR_TYPES[key];
+    const icon = key === "SHORT" ? pixelSprites.anchorShort : key === "HEAVY" ? pixelSprites.anchorHeavy : pixelSprites.anchorReturn;
+    rect(x, y, 82, 30, active ? "#22343a" : "#111c20", active ? type.color : palette.black, 2);
+    drawPixelSprite(icon, x + 6, y + 7, 2, { A: active ? type.color : "#63757b" });
+    text(modeLabel(key), x + 28, y + 8, 12, active ? type.color : palette.foam, "left");
+    if (active) {
+      ctx.globalAlpha = 0.28;
+      px(x + 4, y + 25, 74, 2, type.color);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+
+  function stormLevel() {
+    return clamp(state.heat / 100, 0, 1);
+  }
+
+  function tideLevel() {
+    return state.tideTimer > 0 ? 1 : clamp(state.tide / 100, 0, 1);
+  }
+
+  function seaStateLabel() {
+    const storm = stormLevel();
+    if (storm >= 0.9) return "暴风临界";
+    if (storm >= 0.72) return "风暴逼近";
+    if (storm >= 0.48) return "海况躁动";
+    if (storm >= 0.24) return "海风渐急";
+    return "风平浪静";
+  }
+
+  function tideStateLabel() {
+    if (state.tideTimer > 0) return "狂潮窗口";
+    const tide = tideLevel();
+    if (tide >= 0.72) return "涨潮高位";
+    if (tide >= 0.38) return "潮汐抬升";
+    return "平潮水面";
+  }
+
+  function themedReadyLabel() {
+    if (state.messageTimer > 0) return state.message;
+    if (state.tideTimer > 0) return "潮汐狂涌";
+    if (state.heat > 72) return "风暴逼近";
+    return "待命出航";
+  }
+
+  function drawBracketBar(x, y, w, h, pct, color) {
+    px(x, y, w, h, "#344145");
+    const fill = Math.round(w * clamp(pct, 0, 1));
+    px(x, y, fill, h, color);
+    for (let i = 1; i < 5; i++) {
+      const xx = x + Math.round(w * i / 5);
+      px(xx, y - 1, 2, h + 2, "#19262a");
+    }
+    ctx.globalAlpha = 0.35;
+    px(x, y + 1, fill, 2, palette.foam);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawAnchorEnergyV2(x, y, w, h, type) {
+    panelCard(x, y, w, h, "绞盘张力");
+    const status = readableAnchorStatus(type).replace("锚", "缆");
+    text(status, x + w - 12, y + 9, 10, state.anchorEnergy >= type.cost ? type.color : palette.gray, "right");
+    const barX = x + 12;
+    const barY = y + 30;
+    const barW = w - 24;
+    drawBracketBar(barX, barY, barW, 16, state.anchorEnergy / 100, type.color);
+    const gaugeCx = x + 24;
+    const gaugeCy = y + 50;
+    circle(gaugeCx, gaugeCy, 8, "#0f181b", palette.black, 1);
+    const needle = -Math.PI * 0.8 + Math.PI * 1.6 * clamp(state.anchorEnergy / 100, 0, 1);
+    line(gaugeCx, gaugeCy, gaugeCx + Math.cos(needle) * 6, gaugeCy + Math.sin(needle) * 6, type.color, 2);
+    text(`${Math.round(state.anchorEnergy)} / 100`, x + 38, y + 46, 10, palette.foam, "left");
+    text(`抛缆成本 ${type.cost}`, x + w - 12, y + 46, 10, type.color, "right");
+  }
+
+  function drawRiskBoxV2(x, y, w, h) {
+    panelCard(x, y, w, h, "海况仪表");
+    drawMiniBar(x + 12, y + 26, w - 24, "STORM", state.heat / 100, palette.coral, state.heat > 78);
+    drawMiniBar(x + 12, y + 48, w - 24, "TIDE", state.tideTimer > 0 ? 1 : state.tide / 100, palette.blue, state.tideTimer > 0);
+    text(`${seaStateLabel()} · ${tideStateLabel()}`, x + 12, y + 66, 10, state.tideTimer > 0 ? palette.blue : state.heat > 72 ? palette.coral : "#cfd7d1", "left");
+  }
+
+  function drawPanelV2() {
+    rect(PANEL.x, PANEL.y, PANEL.w, PANEL.h, "#ede8d1", palette.black, 3);
+    ctx.globalAlpha = 0.18;
+    for (let yy = PANEL.y + 12; yy < PANEL.y + PANEL.h - 10; yy += 20) {
+      line(PANEL.x + 12, yy, PANEL.x + PANEL.w - 12, yy, "#9fb1aa", 1);
+    }
+    ctx.globalAlpha = 1;
+
+    const x = PANEL.x + 14;
+    const w = PANEL.w - 28;
+    const type = tunedAnchorType();
+    drawCharacterPortraitV2(x, PANEL.y + 14, w, 132, type);
+    drawScoreBoxV2(x, PANEL.y + 158, w, 104);
+    drawAnchorEnergyV2(x, PANEL.y + 274, w, 72, type);
+    drawRiskBoxV2(x, PANEL.y + 358, w, 78);
+    drawBallsV2(x, PANEL.y + 448, w, 64);
+    drawSkillBoxV2(x, PANEL.y + 524, w, 72, type);
+  }
+
+  function drawCharacterPortraitV2(x, y, w, h, type) {
+    panelCard(x, y, w, h);
+    const spriteScale = 4;
+    const spriteX = x + 12;
+    const spriteY = y + 20;
+    rect(spriteX - 6, spriteY - 6, 20 * spriteScale + 12, 18 * spriteScale + 12, "#22343a", palette.black, 2);
+    drawPixelSprite(pixelSprites.maidenBust, spriteX, spriteY, spriteScale, spriteMap(type.color));
+    px(spriteX + 8 * spriteScale, spriteY + 3 * spriteScale, 4, 4, palette.brass);
+    px(spriteX + 9 * spriteScale, spriteY + 4 * spriteScale, 4, 4, palette.brass);
+
+    text(maiden.name, x + 120, y + 14, 21, palette.foam, "left");
+    text(maiden.title, x + 122, y + 41, 12, "#aeb7b0", "left");
+    rect(x + 120, y + 62, w - 134, 28, "#f4f0df", type.color, 2);
+    text(`当前模式：${modeLabel(type.key)}`, x + 132, y + 69, 13, type.color, "left");
+    rect(x + 120, y + 96, w - 134, 22, "#0e181b", palette.black, 2);
+    text(`状态：${readableBallStatus()}`, x + 132, y + 100, 11, palette.foam, "left");
+  }
+
+  function drawScoreBoxV2(x, y, w, h) {
+    panelCard(x, y, w, h, "本航记录");
+    text(Math.round(state.displayScore).toString().padStart(8, "0"), x + w - 12, y + 8, 28, palette.foam, "right");
+    text(`目标航程 ${state.target}`, x + 12, y + 42, 11, "#cfd7d1", "left");
+    text(`最高航绩 ${state.high}`, x + w - 12, y + 42, 11, "#cfd7d1", "right");
+    const ratio = clamp(state.score / state.target, 0, 1);
+    px(x + 12, y + 64, w - 24, 12, "#334145");
+    px(x + 12, y + 64, Math.round((w - 24) * ratio), 12, state.won ? palette.brass : palette.foam);
+    text(`进度 ${Math.round(ratio * 100)}%`, x + 12, y + 82, 11, state.won ? palette.brass : "#aeb7b0", "left");
+    text(state.won ? "目标达成" : "继续航行", x + w - 12, y + 82, 11, state.won ? palette.brass : "#aeb7b0", "right");
+  }
+
+  function drawBallsV2(x, y, w, h) {
+    panelCard(x, y, w, h, "剩余航次");
+    text(`连锁航迹 ${Math.floor(state.combo)}`, x + w - 12, y + 9, 11, palette.foam, "right");
+    const max = 10;
+    for (let i = 0; i < max; i++) {
+      const cx = x + 18 + (i % 5) * 20;
+      const cy = y + 34 + Math.floor(i / 5) * 19;
+      circle(cx, cy, 6.5, i < Math.min(max, state.ballsLeft) ? palette.foam : "#39484c", palette.black, 1);
+    }
+    if (state.ballsLeft > max) text(`+${state.ballsLeft - max}`, x + 132, y + 40, 14, palette.foam, "left");
+    text(readableBallStatus(), x + w - 12, y + 39, 12, palette.brass, "right");
+  }
+
+  function drawSkillBoxV2(x, y, w, h, type) {
+    panelCard(x, y, w, h);
+    drawModeChipV2(x + 8, y + 8, "SHORT", state.anchorMode === "SHORT");
+    drawModeChipV2(x + 94, y + 8, "HEAVY", state.anchorMode === "HEAVY");
+    drawModeChipV2(x + 180, y + 8, "RETURN", state.anchorMode === "RETURN");
+    text(skillHintText(type), x + 12, y + 46, 11, palette.foam, "left");
+    const scoreMul = scoreGrowthMultiplier();
+    const rangeGain = type.baseRange ? Math.round(type.range - type.baseRange) : 0;
+    text(`航运倍率 x${scoreMul.toFixed(2)}  射程 +${rangeGain}`, x + w - 12, y + 58, 10, type.color, "right");
+    text(`缆绳成本 ${type.cost} · 破浪开路 ${state.brokenPins}`, x + w - 12, y + 46, 10, type.color, "right");
+  }
+
+  function drawOverlayV2() {
+    drawBottomControlsV2();
+    if (MP.enabled || isNetworkNavigator()) drawNavigatorHud();
+    if (!showIntro && !paused && !state.gameOver) return;
+
+    ctx.save();
+    const ox = FIELD.x + 160;
+    const oy = FIELD.y + 156;
+    const ow = FIELD.w - 320;
+    const oh = 190;
+    ctx.globalAlpha = 0.82;
+    rect(ox - 18, oy - 18, ow + 36, oh + 36, "#17252a", null, 0);
+    ctx.globalAlpha = 1;
+    rect(ox, oy, ow, oh, null, palette.foam, 3);
+
+    if (paused) {
+      outlineText("暂停航行", FIELD.x + FIELD.w / 2, oy + 32, 40, palette.foam, "center");
+      text("按 P 继续", FIELD.x + FIELD.w / 2, oy + 112, 18, palette.foam, "center");
+    } else if (state.gameOver) {
+      outlineText(state.won ? "航线完成" : "航线失败", FIELD.x + FIELD.w / 2, oy + 30, 38, state.won ? palette.brass : palette.foam, "center");
+      text(`得分 ${state.score}`, FIELD.x + FIELD.w / 2, oy + 102, 20, palette.foam, "center");
+      text("按 R 重新开始", FIELD.x + FIELD.w / 2, oy + 140, 16, palette.brass, "center");
+    } else {
+      outlineText("锚链水手·潮航弹珠机", FIELD.x + FIELD.w / 2, oy + 28, 36, palette.foam, "center");
+      text("按住 SPACE 蓄力，松开发射角色球", FIELD.x + FIELD.w / 2, oy + 94, 17, palette.foam, "center");
+      text("X / SHIFT 进入子弹时间，用鼠标选择锚点", FIELD.x + FIELD.w / 2, oy + 130, 15, palette.brass, "center");
+      text("1 / 2 / 3 切换锚型，顺着海况抓机会", FIELD.x + FIELD.w / 2, oy + 158, 13, "#cdd8d4", "center");
+    }
+    ctx.restore();
+  }
+
+  function drawBottomControlsV2() {
+    const x = FIELD.x;
+    const y = FIELD.b + 8;
+    const w = FIELD.w;
+    rect(x, y, w, 28, "#17252a", palette.black, 2);
+    const type = anchorType();
+    const items = isNetworkNavigator()
+      ? [
+        ["4 / 5", "护航/导流", palette.brass],
+        ["6 / 7", "爆裂/封港", palette.brass],
+        ["房间", MP.room || "-", palette.foam],
+        ["状态", MP.status || state.netStatus, MP.connected ? palette.blue : palette.gray]
+      ]
+      : [
+        ["SPACE", "蓄潮", palette.foam],
+        ["A / D", "调舵", palette.foam],
+        ["X / SHIFT", `抛缆 ${modeLabel(type.key)}`, state.anchorEnergy >= type.cost ? type.color : palette.gray],
+        ["1 / 2 / 3", "切缆", palette.foam],
+        [MP.enabled ? "联机" : "1P", MP.enabled ? MP.room : "单人", MP.enabled ? palette.brass : palette.blue]
+      ];
+    let cx = x + 18;
+    for (const [key, label, color] of items) {
+      text(key, cx, y + 8, 12, color, "left");
+      text(label, cx + 76, y + 8, 12, "#cfd7d1", "left");
+      cx += 188;
+    }
+    const bx = FIELD.r - 166;
+    const by = y + 12;
+    text("航压", bx - 8, by - 5, 10, state.charging ? palette.foam : "#8d958e", "right");
+    px(bx, by, 140, 8, "#344145");
+    px(bx, by, Math.round(140 * state.power), 8, state.charging ? palette.brass : "#788284");
+  }
+
+  function ensureAudio() {
+    if (!soundEnabled || audioCtx) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (_) {
+      soundEnabled = false;
+    }
+  }
+
+  function beep(freq = 440, dur = 0.04, gain = 0.022, type = "square") {
+    if (!soundEnabled || !audioCtx) return;
+    try {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      g.gain.value = gain;
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      const t = audioCtx.currentTime;
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
+    } catch (_) {
+      soundEnabled = false;
+    }
+  }
+
+  function addFloat(s, x, y, color = palette.foam, size = 15, vy = -38) {
+    floats.push({ s, x, y, color, size, vy, life: 0.85, max: 0.85 });
+    if (floats.length > MAX_FLOATS) floats.splice(0, floats.length - MAX_FLOATS);
+  }
+
+  function addRing(x, y, r, color = palette.foam, life = 0.32) {
+    rings.push({ x, y, r, color, life, max: life });
+    if (rings.length > MAX_RINGS) rings.splice(0, rings.length - MAX_RINGS);
+  }
+
+  function addAnchorFx(fromX, fromY, target, type) {
+    const dx = target.x - fromX;
+    const dy = target.y - fromY;
+    const travel = clamp(Math.hypot(dx, dy) / 1450, 0.08, 0.18);
+    anchorFx.push({
+      fromX,
+      fromY,
+      x: target.x,
+      y: target.y,
+      r: target.r || 10,
+      kind: type.key,
+      color: type.color,
+      travel,
+      lock: type.key === "HEAVY" ? 0.34 : 0.28,
+      life: travel + (type.key === "HEAVY" ? 0.34 : 0.28),
+      max: travel + (type.key === "HEAVY" ? 0.34 : 0.28)
+    });
+  }
+
+  function addParticles(x, y, count, speed = 110, color = palette.foam, size = 3) {
+    for (let i = 0; i < count; i++) {
+      const a = rnd(0, TAU);
+      const s = rnd(speed * 0.25, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        color,
+        size: rnd(size * 0.6, size),
+        life: rnd(0.2, 0.58),
+        max: 0.58
+      });
+    }
+    if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
+  }
+
+  function setMessage(s, time = 1.1) {
+    state.message = s;
+    state.messageTimer = time;
+  }
+
+
+  function isNetworkNavigator() {
+    return MP.enabled && MP.role === "navigator";
+  }
+
+  function isGameAuthority() {
+    return !MP.enabled || MP.role === "helm";
+  }
+
+  function resourceLabel() {
+    return MP.enabled && MP.role === "versus" ? "怨潮" : "航材";
+  }
+
+  function canNavigatorControl() {
+    return MP.enabled && MP.role === "navigator";
+  }
+
+  function canHelmControl() {
+    return !isNetworkNavigator();
+  }
+
+  function hasFreeAnchor() {
+    return state.freeAnchorCharges > 0 && state.freeAnchorTimer > 0;
+  }
+
+  function grantFreeAnchor(label = "免费抛锚") {
+    state.freeAnchorCharges = Math.min(1, state.freeAnchorCharges + 1);
+    state.freeAnchorTimer = 5;
+    addFloat(label, ball.dead ? FIELD.x + FIELD.w / 2 : ball.x, ball.dead ? FIELD.y + 100 : ball.y - 44, palette.brass, 18);
+    setMessage("免费抛锚：5 秒内下一次锚链免耗", 1.15);
+    beep(960, 0.06, 0.026, "square");
+  }
+
+  function consumeFreeAnchor(type) {
+    if (!hasFreeAnchor()) return false;
+    state.freeAnchorCharges = Math.max(0, state.freeAnchorCharges - 1);
+    if (state.freeAnchorCharges <= 0) state.freeAnchorTimer = 0;
+    addFloat("免耗抛锚", ball.x, ball.y - 36, type.color, 16);
+    addRing(ball.x, ball.y, 34, type.color, 0.24);
+    return true;
+  }
+
+  function awardNavigatorResource(amount = 1, reason = "") {
+    if (!isGameAuthority()) return;
+    const before = state.navigatorMaterial;
+    state.navigatorMaterial = clamp(state.navigatorMaterial + amount, 0, state.navigatorMaterialMax);
+    if (state.navigatorMaterial > before) {
+      const label = `+${state.navigatorMaterial - before} ${resourceLabel()}`;
+      addFloat(label, PANEL.x + PANEL.w / 2, PANEL.y + 514, palette.brass, 14, -24);
+      if (reason) setMessage(`${reason}：${label}`, 0.85);
+    }
+  }
+
+  function resetNavigatorComboGrant() {
+    state.navigatorComboGrant = 0;
+  }
+
+  function availableBoardCount() {
+    return driftBoards.filter(b => !b.broken).length + boardPreviews.length;
+  }
+
+  function boardCardName(card) {
+    return MP.enabled && MP.role === "versus" ? card.versusName : card.coopName;
+  }
+
+  function addPendingCard(cardId, kind) {
+    MP.pendingCards.push({ cardId, kind, status: "请求中", timer: 2.8 });
+    if (MP.pendingCards.length > 6) MP.pendingCards.splice(0, MP.pendingCards.length - 6);
+  }
+
+  function updateCardResult(cardId, kind, accepted, reason = "", material = null) {
+    const pending = MP.pendingCards.find(c => c.cardId === cardId);
+    const label = accepted ? "已布置" : reason || "未执行";
+    if (pending) {
+      pending.status = label;
+      pending.timer = accepted ? 2.0 : 2.6;
+    } else if (cardId) {
+      MP.pendingCards.push({ cardId, kind, status: label, timer: 2.0 });
+    }
+    MP.lastCardResult = `${BOARD_CARDS[kind]?.coopName || "卡牌"}：${label}`;
+    if (Number.isFinite(material)) state.navigatorMaterial = material;
+    setMessage(MP.lastCardResult, accepted ? 0.75 : 1.0);
+  }
+
+  function rejectReasonForCard(card) {
+    if (state.gameOver) return "航程结束";
+    if (state.navigatorCooldown > 0) return "冷却中";
+    if (state.navigatorMaterial < card.cost) return `${resourceLabel()}不足`;
+    if (availableBoardCount() >= BOARD_LIMIT) return "航障已满";
+    return "";
+  }
+
+  function playNavigatorCard(kind, source = "local") {
+    const card = BOARD_CARDS[kind];
+    if (!card) return false;
+
+    if (MP.enabled && MP.role === "navigator" && source === "local") {
+      const cardId = `${MP.room}:${MP.role}:${++MP.cardSeq}`;
+      sendNet({ type: "play_card", kind, cardId });
+      addPendingCard(cardId, kind);
+      setMessage(`已请求布置：${card.coopName}`, 0.7);
+      return true;
+    }
+
+    if (source && source !== "local" && source !== "remote") {
+      if (MP.seenCards.includes(source)) return false;
+      MP.seenCards.push(source);
+      if (MP.seenCards.length > 80) MP.seenCards.splice(0, MP.seenCards.length - 80);
+    }
+
+    if (!isGameAuthority()) return false;
+
+    const rejectReason = rejectReasonForCard(card);
+    if (rejectReason) {
+      if (source && source !== "local" && source !== "remote") {
+        sendNet({ type: "card_result", cardId: source, kind, accepted: false, reason: rejectReason, material: state.navigatorMaterial });
+      }
+      setMessage(rejectReason === "冷却中" ? "布场冷却中" : rejectReason === "航障已满" ? "同屏航障已满" : rejectReason, 0.7);
+      if (rejectReason === `${resourceLabel()}不足`) addFloat(`${resourceLabel()}不足`, PANEL.x + PANEL.w / 2, PANEL.y + 512, palette.gray, 14);
+      if (rejectReason === "航障已满") addFloat("航障上限", FIELD.x + FIELD.w / 2, FIELD.y + 84, palette.gray, 14);
+      beep(130, 0.045, 0.016, "triangle");
+      return false;
+    }
+
+    const spec = makeBoardSpec(card);
+    if (!spec) return false;
+
+    state.navigatorMaterial -= card.cost;
+    state.navigatorCooldown = 2.0;
+    boardPreviews.push({
+      ...spec,
+      previewLife: BOARD_SPAWN_WARNING,
+      maxPreviewLife: BOARD_SPAWN_WARNING,
+      cardKey: kind,
+      cardName: boardCardName(card)
+    });
+
+    setMessage(`${boardCardName(card)}：${card.hint}`, 1.05);
+    addFloat(boardCardName(card), spec.x, spec.y - 42, card.accent, 15, -24);
+    addRing(spec.x, spec.y, Math.max(card.w, card.h) * 0.45, card.accent, 0.24);
+    beep(360 + card.cost * 90, 0.045, 0.02, "square");
+    sendNet({ type: "event", event: "card_accepted", kind, material: state.navigatorMaterial });
+    if (source && source !== "local" && source !== "remote") {
+      sendNet({ type: "card_result", cardId: source, kind, accepted: true, reason: "已布置", material: state.navigatorMaterial });
+    }
+    return true;
+  }
+
+  function makeBoardSpec(card) {
+    const margin = 50;
+    let x = clamp(ball.dead ? FIELD.x + FIELD.w * 0.5 : ball.x, FIELD.x + margin, FIELD.r - margin);
+    let y = clamp(ball.dead ? FIELD.b - 128 : ball.y + 72, FIELD.y + 145, FIELD.b - 104);
+    let angle = 0;
+
+    if (card.key === "guard") {
+      x = clamp(ball.dead ? FIELD.x + FIELD.w * 0.5 : ball.x + Math.sign(ball.vx || 1) * 32, FIELD.x + 110, FIELD.r - 150);
+      y = FIELD.b - 116;
+      angle = 0;
+    } else if (card.key === "ramp") {
+      const dir = ball.dead ? (chance(0.5) ? 1 : -1) : (ball.vx >= 0 ? -1 : 1);
+      x = clamp((ball.dead ? FIELD.x + FIELD.w * 0.5 : ball.x) + dir * 52, FIELD.x + 145, FIELD.r - 155);
+      y = clamp((ball.dead ? FIELD.y + 350 : ball.y + 82), FIELD.y + 210, FIELD.b - 170);
+      angle = dir > 0 ? 0.52 : -0.52;
+    } else if (card.key === "blast") {
+      const candidates = pins.filter(p => !p.broken && p.kind !== "anchor" && p.x > FIELD.x + 120 && p.x < FIELD.r - 180 && p.y > FIELD.y + 185 && p.y < FIELD.b - 160);
+      const target = candidates.length ? candidates[(Math.random() * candidates.length) | 0] : { x: FIELD.x + FIELD.w * 0.5, y: FIELD.y + FIELD.h * 0.52 };
+      x = clamp(target.x + rnd(-32, 32), FIELD.x + 105, FIELD.r - 125);
+      y = clamp(target.y + rnd(-24, 24), FIELD.y + 160, FIELD.b - 145);
+      angle = rnd(-0.25, 0.25);
+    } else if (card.key === "block") {
+      const pocket = pockets.filter(p => ["port", "anchor", "treasure", "storm"].includes(p.kind)).sort((a, b) => (b.value - a.value))[0] || pockets[0];
+      x = pocket.x;
+      y = pocket.y - pocket.r - 26;
+      angle = 0;
+    }
+
+    if (!ball.dead && dist(x, y, ball.x, ball.y) < 48) {
+      y = clamp(y - 62, FIELD.y + 130, FIELD.b - 118);
+    }
+
+    return {
+      id: ++state.boardSeq,
+      kind: card.key,
+      label: card.label,
+      x,
+      y,
+      w: card.w,
+      h: card.h,
+      angle,
+      hp: card.hp,
+      maxHp: card.hp,
+      crackAt: card.crack,
+      breakAt: card.breakAt,
+      breakScore: card.score,
+      color: card.color,
+      accent: card.accent,
+      expiresIn: card.life,
+      maxLife: card.life,
+      crackCount: 0,
+      crackTimer: 0,
+      hitCooldown: 0,
+      expireGrace: 0,
+      expiring: false,
+      pulse: 0,
+      broken: false,
+      owner: MP.enabled ? MP.role : "local"
+    };
+  }
+
+  function spawnBoard(preview) {
+    const board = { ...preview };
+    delete board.previewLife;
+    delete board.maxPreviewLife;
+    delete board.cardName;
+    driftBoards.push(board);
+    if (driftBoards.length > BOARD_LIMIT) driftBoards.shift();
+    addParticles(board.x, board.y, 14, 95, board.accent, 2.4);
+    addRing(board.x, board.y, Math.max(board.w, board.h) * 0.46, board.accent, 0.28);
+  }
+
+  function updateBoardSystem(dt) {
+    state.navigatorCooldown = Math.max(0, state.navigatorCooldown - dt);
+    if (state.freeAnchorTimer > 0) {
+      state.freeAnchorTimer -= dt;
+      if (state.freeAnchorTimer <= 0) {
+        state.freeAnchorTimer = 0;
+        state.freeAnchorCharges = 0;
+        addFloat("免耗失效", ball.dead ? FIELD.x + FIELD.w / 2 : ball.x, ball.dead ? FIELD.y + 100 : ball.y - 36, palette.gray, 13);
+      }
+    }
+
+    for (let i = boardPreviews.length - 1; i >= 0; i--) {
+      const p = boardPreviews[i];
+      p.previewLife -= dt;
+      if (p.previewLife <= 0) {
+        boardPreviews.splice(i, 1);
+        spawnBoard(p);
+      }
+    }
+
+    for (let i = driftBoards.length - 1; i >= 0; i--) {
+      const b = driftBoards[i];
+      b.expiresIn -= dt;
+      b.hitCooldown = Math.max(0, b.hitCooldown - dt);
+      b.pulse = Math.max(0, b.pulse - dt);
+      if (b.crackTimer > 0) {
+        b.crackTimer -= dt;
+      } else if (b.crackCount > 0) {
+        b.crackCount = Math.max(0, b.crackCount - dt * 0.85);
+      }
+      if (b.broken) {
+        addParticles(b.x, b.y, 8, 70, palette.gray, 2);
+        driftBoards.splice(i, 1);
+        continue;
+      }
+      if (b.expiresIn <= 0) {
+        if (boardTouchesBall(b, 8) && (b.expireGrace || 0) < BOARD_EXPIRE_GRACE) {
+          b.expiring = true;
+          b.expireGrace = (b.expireGrace || 0) + dt;
+          b.expiresIn = 0;
+          b.pulse = Math.max(b.pulse, 0.08);
+          continue;
+        }
+        addParticles(b.x, b.y, 8, 70, palette.gray, 2);
+        driftBoards.splice(i, 1);
+      }
+    }
+  }
+
+  function boardLocalPoint(b, x, y) {
+    const c = Math.cos(-b.angle);
+    const s = Math.sin(-b.angle);
+    const dx = x - b.x;
+    const dy = y - b.y;
+    return {
+      x: dx * c - dy * s,
+      y: dx * s + dy * c
+    };
+  }
+
+  function boardWorldVec(b, x, y) {
+    const c = Math.cos(b.angle);
+    const s = Math.sin(b.angle);
+    return {
+      x: x * c - y * s,
+      y: x * s + y * c
+    };
+  }
+
+  function boardTouchesBall(b, pad = 0) {
+    if (!b || b.broken || ball.dead || ball.inLane) return false;
+    const lp = boardLocalPoint(b, ball.x, ball.y);
+    const hx = b.w * 0.5 + pad;
+    const hy = b.h * 0.5 + pad;
+    const cx = clamp(lp.x, -hx, hx);
+    const cy = clamp(lp.y, -hy, hy);
+    return Math.hypot(lp.x - cx, lp.y - cy) <= ball.r + pad;
+  }
+
+  function boardNearPoint(b, x, y, pad = 0) {
+    if (!b || b.broken) return false;
+    const lp = boardLocalPoint(b, x, y);
+    return Math.abs(lp.x) <= b.w * 0.5 + pad && Math.abs(lp.y) <= b.h * 0.5 + pad;
+  }
+
+  function ropeTouchesBoard(a, b, pad = 18) {
+    if (!a || !b || b.broken) return false;
+    for (let i = 1; i <= 5; i++) {
+      const t = i / 6;
+      if (boardNearPoint(b, lerp(a.x, ball.x, t), lerp(a.y, ball.y, t), pad)) return true;
+    }
+    return pointSegmentDistance(b.x, b.y, a.x, a.y, ball.x, ball.y) <= Math.max(24, b.h + pad);
+  }
+
+  function pointSegmentDistance(px, py, x1, y1, x2, y2) {
+    const vx = x2 - x1;
+    const vy = y2 - y1;
+    const len2 = vx * vx + vy * vy || 1;
+    const t = clamp(((px - x1) * vx + (py - y1) * vy) / len2, 0, 1);
+    return dist(px, py, x1 + vx * t, y1 + vy * t);
+  }
+
+  function rememberAnchorBoardHit(a, b, tag) {
+    if (!a || !b) return false;
+    if (!a.boardHitKeys) a.boardHitKeys = [];
+    const key = `${tag}:${b.id}`;
+    if (a.boardHitKeys.includes(key)) return false;
+    a.boardHitKeys.push(key);
+    return true;
+  }
+
+  function strainBoardsByShortAnchor(a, taut) {
+    if (!a || taut < 0.58) return;
+    for (const b of driftBoards) {
+      if (b.broken || !ropeTouchesBoard(a, b, 14 + taut * 12)) continue;
+      if (!rememberAnchorBoardHit(a, b, "short")) continue;
+      registerBoardHit(b, "short", 1);
+      addFloat("短链压裂", b.x, b.y - 34, ANCHOR_TYPES.SHORT.color, 13, -20);
+    }
+  }
+
+  function strainGuardBoardsByReturnAnchor(a) {
+    if (!a || !a.perfect || ball.y < FIELD.b - 250) return;
+    for (const b of driftBoards) {
+      if (b.broken || b.kind !== "guard") continue;
+      if (!ropeTouchesBoard(a, b, 30) && dist(ball.x, ball.y, b.x, b.y) > 170) continue;
+      if (!rememberAnchorBoardHit(a, b, "return")) continue;
+      registerBoardHit(b, "return", 1);
+      awardNavigatorResource(1, "回航护航");
+      addFloat("回航压裂", b.x, b.y - 34, ANCHOR_TYPES.RETURN.color, 13, -20);
+    }
+  }
+
+  function collideBoard(obj, b) {
+    if (!b || b.broken) return false;
+    const lp = boardLocalPoint(b, obj.x, obj.y);
+    const hx = b.w * 0.5;
+    const hy = b.h * 0.5;
+    const cx = clamp(lp.x, -hx, hx);
+    const cy = clamp(lp.y, -hy, hy);
+    let dx = lp.x - cx;
+    let dy = lp.y - cy;
+    let d = Math.hypot(dx, dy);
+    if (d >= obj.r) return false;
+
+    let nx;
+    let ny;
+    if (d < 0.001) {
+      const edgeX = hx - Math.abs(lp.x);
+      const edgeY = hy - Math.abs(lp.y);
+      if (edgeX < edgeY) {
+        nx = lp.x >= 0 ? 1 : -1;
+        ny = 0;
+        d = edgeX;
+      } else {
+        nx = 0;
+        ny = lp.y >= 0 ? 1 : -1;
+        d = edgeY;
+      }
+    } else {
+      nx = dx / d;
+      ny = dy / d;
+    }
+
+    const wn = boardWorldVec(b, nx, ny);
+    const overlap = Math.max(0, obj.r - Math.min(d, obj.r));
+    obj.x += wn.x * (overlap + 0.6);
+    obj.y += wn.y * (overlap + 0.6);
+    const dot = obj.vx * wn.x + obj.vy * wn.y;
+    if (dot < 0) {
+      const bounce = b.kind === "ramp" ? 0.92 : b.kind === "guard" ? 0.74 : 0.82;
+      obj.vx -= (1 + bounce) * dot * wn.x;
+      obj.vy -= (1 + bounce) * dot * wn.y;
+      if (b.kind === "blast") {
+        obj.vx += wn.x * 40;
+        obj.vy += wn.y * 40;
+      }
+    }
+
+    registerBoardHit(b, "ball", 1);
+    return true;
+  }
+
+  function registerBoardHit(b, source = "ball", amount = 1) {
+    if (!b || b.broken || b.hitCooldown > 0) return;
+    b.hitCooldown = BOARD_HIT_COOLDOWN;
+    b.pulse = 0.32;
+
+    const comboAmount = source === "heavy" ? 3 : amount;
+    if (b.crackTimer > 0) b.crackCount += comboAmount;
+    else b.crackCount = Math.max(comboAmount, 1);
+
+    b.crackTimer = BOARD_HIT_WINDOW;
+    b.hp = Math.max(0, b.hp - amount);
+
+    addScore(source === "heavy" ? 120 : 36, b.x, b.y, b.label);
+    bumpCombo(source === "heavy" ? 0.5 : 0.18);
+    addParticles(ball.x, ball.y, source === "heavy" ? 8 : 4, source === "heavy" ? 120 : 72, b.accent, 2);
+
+    if (b.crackCount >= b.crackAt && b.crackCount < b.breakAt) {
+      addFloat("结构龟裂", b.x, b.y - 26, b.accent, 13, -22);
+      setMessage("压裂点：结构龟裂", 0.6);
+    }
+
+    if (source === "heavy" && b.kind === "blast") {
+      breakBoard(b, "heavy");
+      return;
+    }
+
+    if (b.crackCount >= b.breakAt || b.hp <= 0) breakBoard(b, source);
+  }
+
+  function breakBoard(b, source = "ball") {
+    if (!b || b.broken) return;
+    b.broken = true;
+
+    const bonus = source === "heavy" && b.kind === "blast" ? 1.45 : 1;
+    addScore(b.breakScore || 2200, b.x, b.y, "航障崩解", bonus);
+    bumpCombo(1.6);
+    awardNavigatorResource(1, "压裂击碎");
+    grantFreeAnchor("免费抛锚");
+
+    const kick = b.kind === "blast" ? 680 : b.kind === "ramp" ? 560 : 480;
+    if (!ball.dead) {
+      if (b.kind === "ramp") {
+        const tangent = boardWorldVec(b, 1, 0);
+        ball.vx = ball.vx * 0.55 + tangent.x * kick * (ball.vx >= 0 ? 1 : -1);
+        ball.vy = Math.min(ball.vy * 0.45 - 420, -220);
+      } else {
+        ball.vx += rnd(-180, 180);
+        ball.vy = Math.min(ball.vy, -kick);
+      }
+    }
+
+    addFloat("压裂击碎！", b.x, b.y - 48, palette.brass, 22, -36);
+    addParticles(b.x, b.y, b.kind === "blast" ? 38 : 24, b.kind === "blast" ? 210 : 150, b.accent, 3.2);
+    addParticles(b.x, b.y, 18, 180, "#b78951", 2.6);
+    addRing(b.x, b.y, Math.max(b.w, b.h) * 0.56, b.accent, 0.42);
+    addWaterRipple(b.x, b.y, b.kind === "blast" ? 1.8 : 1.25);
+    state.shake = Math.max(state.shake, b.kind === "blast" ? 14 : 8);
+    beep(b.kind === "blast" ? 160 : 260, 0.11, 0.038, "triangle");
+    window.setTimeout(() => beep(820, 0.06, 0.025, "square"), 90);
+
+    if (b.kind === "blast") {
+      heavyBoardShardDamage(b.x, b.y, 92);
+    }
+
+    sendNet({ type: "event", event: "board_break", id: b.id, kind: b.kind });
+  }
+
+  function heavyBoardShardDamage(x, y, radius) {
+    for (const p of pins) {
+      if (p.broken || (p.kind !== "pin" && p.kind !== "brass")) continue;
+      const d = dist(x, y, p.x, p.y);
+      if (d < radius) {
+        const fakeType = { pinDamage: 1, pinBreakScore: 210, pinCrackScore: 80, color: palette.brass };
+        damagePin(p, fakeType, 1);
+      }
+    }
+  }
+
+  function damageBoardsByHeavy(x, y, type, radius) {
+    for (const b of driftBoards) {
+      if (b.broken) continue;
+      const d = dist(x, y, b.x, b.y);
+      if (d < radius + Math.max(b.w, b.h) * 0.45) {
+        registerBoardHit(b, "heavy", b.kind === "blast" ? b.breakAt : 3);
+      }
+    }
+  }
+
+  function drawBoardPreviews() {
+    for (const b of boardPreviews) {
+      const t = 1 - b.previewLife / Math.max(0.001, b.maxPreviewLife || BOARD_SPAWN_WARNING);
+      ctx.save();
+      ctx.globalAlpha = 0.22 + 0.28 * Math.sin(t * Math.PI);
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.angle);
+      rect(-b.w / 2, -b.h / 2, b.w, b.h, b.accent, palette.foam, 2);
+      ctx.globalAlpha = 0.72;
+      text("布场预告", 0, -b.h / 2 - 24, 12, palette.foam, "center");
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawDriftBoards() {
+    for (const b of driftBoards) drawBoard(b);
+  }
+
+  function drawBoard(b) {
+    const lifePct = clamp(b.expiresIn / Math.max(0.001, b.maxLife), 0, 1);
+    const cracked = b.crackCount >= b.crackAt;
+    const critical = b.crackCount >= b.breakAt - 1;
+    ctx.save();
+    ctx.translate(Math.round(b.x), Math.round(b.y));
+    ctx.rotate(b.angle);
+
+    const flash = b.pulse > 0 ? Math.sin(b.pulse * 42) * 0.5 + 0.5 : 0;
+    const fill = cracked ? "#7a4f37" : b.color;
+    rect(-b.w / 2, -b.h / 2, b.w, b.h, fill, critical ? palette.brass : palette.black, critical ? 3 : 2);
+
+    // 木纹
+    for (let i = -b.h / 2 + 4; i < b.h / 2; i += 6) {
+      line(-b.w / 2 + 8, i, b.w / 2 - 8, i + Math.sin(i + state.phase) * 2, "rgba(20,13,8,0.35)", 1);
+    }
+    for (let i = -b.w / 2 + 18; i < b.w / 2; i += 28) {
+      line(i, -b.h / 2 + 2, i + 4, b.h / 2 - 2, "#3b291e", 1);
+    }
+
+    if (cracked) {
+      line(-b.w * 0.25, -b.h * 0.5, -b.w * 0.05, b.h * 0.1, b.accent, 2);
+      line(-b.w * 0.05, b.h * 0.1, b.w * 0.18, -b.h * 0.2, b.accent, 2);
+      line(b.w * 0.1, b.h * 0.45, b.w * 0.28, -b.h * 0.35, b.accent, 1);
+    }
+
+    if (flash > 0.1) {
+      ctx.globalAlpha = 0.22 * flash;
+      rect(-b.w / 2 - 4, -b.h / 2 - 4, b.w + 8, b.h + 8, null, b.accent, 3);
+      ctx.globalAlpha = 1;
+    }
+
+    // 倒计时条
+    px(-b.w / 2, b.h / 2 + 4, b.w, 4, "#1b2528");
+    px(-b.w / 2, b.h / 2 + 4, b.w * lifePct, 4, b.accent);
+
+    ctx.restore();
+
+    const count = Math.floor(b.crackCount);
+    const label = count > 0 ? `${count}/${b.breakAt}` : b.label;
+    outlineText(label, b.x, b.y - b.h * 0.5 - 18, count > 0 ? 13 : 11, critical ? palette.brass : palette.foam, "center");
+  }
+
+  function drawNavigatorHud() {
+    const x = FIELD.x + 12;
+    const y = FIELD.y + 12;
+    const w = 252;
+    const h = MP.enabled ? 148 : 112;
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    rect(x, y, w, h, "#111c20", palette.black, 2);
+    ctx.globalAlpha = 1;
+    text(MP.enabled ? `联机 ${MP.role === "helm" ? "掌舵手" : "航海士"} · ${MP.room}` : "单人航行", x + 10, y + 8, 12, palette.foam, "left");
+    text(MP.enabled ? MP.status : "掌舵模式", x + w - 10, y + 8, 10, MP.connected ? palette.blue : palette.brass, "right");
+
+    if (MP.enabled) {
+      const helmReady = MP.ready.helm ? "掌舵 已备" : "掌舵 待命";
+      const navReady = MP.ready.navigator ? "航海 已备" : "航海 待命";
+      text(helmReady, x + 10, y + 28, 11, MP.ready.helm ? palette.blue : palette.gray, "left");
+      text(navReady, x + w - 10, y + 28, 11, MP.ready.navigator ? palette.blue : palette.gray, "right");
+      text(`R ${MP.readyLocal ? "取消准备" : "准备"} · ${MP.readyAll ? "可开航" : "等待同伴"}`, x + 10, y + 47, 11, MP.readyAll ? palette.brass : palette.foam, "left");
+    }
+
+    const pct = state.navigatorMaterial / state.navigatorMaterialMax;
+    const infoY = MP.enabled ? y + 68 : y + 30;
+    text(`${resourceLabel()} ${state.navigatorMaterial}/${state.navigatorMaterialMax}`, x + 10, infoY, 12, palette.brass, "left");
+    px(x + 92, infoY + 4, w - 104, 8, "#344145");
+    px(x + 92, infoY + 4, Math.round((w - 104) * pct), 8, palette.brass);
+
+    const cd = state.navigatorCooldown > 0 ? `冷却 ${state.navigatorCooldown.toFixed(1)}s` : "可布场";
+    text(cd, x + 10, infoY + 20, 11, state.navigatorCooldown > 0 ? palette.gray : palette.blue, "left");
+    text(`航障 ${availableBoardCount()}/${BOARD_LIMIT}`, x + w - 10, infoY + 20, 11, palette.foam, "right");
+
+    const cards = [
+      ["4", BOARD_CARDS.guard],
+      ["5", BOARD_CARDS.ramp],
+      ["6", BOARD_CARDS.blast],
+      ["7", BOARD_CARDS.block]
+    ];
+    let cx = x + 10;
+    for (const [key, card] of cards) {
+      const affordable = state.navigatorMaterial >= card.cost && state.navigatorCooldown <= 0 && availableBoardCount() < BOARD_LIMIT;
+      rect(cx, infoY + 42, 52, 26, affordable ? "#22343a" : "#182226", affordable ? card.accent : "#3d4a4e", 1);
+      text(key, cx + 5, infoY + 48, 11, palette.foam, "left");
+      text(`${card.cost}`, cx + 44, infoY + 48, 10, palette.brass, "right");
+      text(card.coopName.slice(0, 2), cx + 24, infoY + 48, 11, affordable ? card.accent : palette.gray, "center");
+      cx += 58;
+    }
+
+    if (MP.enabled && MP.pendingCards.length) {
+      const last = MP.pendingCards[MP.pendingCards.length - 1];
+      const label = `${BOARD_CARDS[last.kind]?.coopName || "卡牌"} ${last.status}`;
+      text(label, x + 10, y + h - 18, 11, last.status === "已布置" ? palette.blue : palette.brass, "left");
+    }
+
+    if (hasFreeAnchor()) {
+      rect(x, y + h + 6, w, 24, "#2a2416", palette.brass, 2);
+      text(`免费抛锚 ${state.freeAnchorTimer.toFixed(1)}s`, x + w / 2, y + h + 11, 12, palette.brass, "center");
+    }
+    ctx.restore();
+  }
+
+  function snapshotGame() {
+    return {
+      t: performance.now(),
+      state: {
+        score: state.score,
+        displayScore: state.displayScore,
+        high: state.high,
+        target: state.target,
+        ballsLeft: state.ballsLeft,
+        heat: state.heat,
+        tide: state.tide,
+        tideTimer: state.tideTimer,
+        combo: state.combo,
+        comboTimer: state.comboTimer,
+        anchorEnergy: state.anchorEnergy,
+        anchorCooldown: state.anchorCooldown,
+        anchorMode: state.anchorMode,
+        anchorUses: state.anchorUses,
+        anchorAim: state.anchorAim,
+        anchorAimQuality: state.anchorAimQuality,
+        brokenPins: state.brokenPins,
+        message: state.message,
+        messageTimer: state.messageTimer,
+        gameOver: state.gameOver,
+        won: state.won,
+        navigatorMaterial: state.navigatorMaterial,
+        navigatorCooldown: state.navigatorCooldown,
+        freeAnchorCharges: state.freeAnchorCharges,
+        freeAnchorTimer: state.freeAnchorTimer,
+        phase: state.phase
+      },
+      ball: {
+        x: ball.x,
+        y: ball.y,
+        vx: ball.vx,
+        vy: ball.vy,
+        r: ball.r,
+        dead: ball.dead,
+        inLane: ball.inLane,
+        sweet: ball.sweet,
+        anchor: ball.anchor ? {
+          x: ball.anchor.x,
+          y: ball.anchor.y,
+          len: ball.anchor.len,
+          anchorType: ball.anchor.anchorType,
+          life: ball.anchor.life,
+          max: ball.anchor.max,
+          quality: ball.anchor.quality,
+          perfect: !!ball.anchor.perfect,
+          virtual: !!ball.anchor.virtual
+        } : null
+      },
+      boards: driftBoards.map(b => ({ ...b })),
+      previews: boardPreviews.map(b => ({ ...b })),
+      pins: pins.map(p => ({ hp: p.hp, broken: !!p.broken, cracked: !!p.cracked, hit: p.hit })),
+      bumpers: bumpers.map(b => ({ hit: b.hit })),
+      pockets: pockets.map(p => ({ pulse: p.pulse }))
+    };
+  }
+
+  function applySnapshot(snap) {
+    if (!snap || !snap.state || !snap.ball) return;
+    Object.assign(state, snap.state);
+    Object.assign(ball, snap.ball);
+    if (snap.ball.anchor) {
+      ball.anchor = { ...snap.ball.anchor, target: null, spin: 1, taut: 0, tautPeak: 0 };
+    } else {
+      ball.anchor = null;
+    }
+    driftBoards.length = 0;
+    for (const b of snap.boards || []) driftBoards.push({ ...b });
+    boardPreviews.length = 0;
+    for (const b of snap.previews || []) boardPreviews.push({ ...b });
+    if (snap.pins) {
+      for (let i = 0; i < Math.min(pins.length, snap.pins.length); i++) Object.assign(pins[i], snap.pins[i]);
+    }
+    if (snap.bumpers) {
+      for (let i = 0; i < Math.min(bumpers.length, snap.bumpers.length); i++) Object.assign(bumpers[i], snap.bumpers[i]);
+    }
+    if (snap.pockets) {
+      for (let i = 0; i < Math.min(pockets.length, snap.pockets.length); i++) Object.assign(pockets[i], snap.pockets[i]);
+    }
+  }
+
+  function sendNet(payload) {
+    if (!MP.enabled || !MP.ws || MP.ws.readyState !== WebSocket.OPEN) return;
+    MP.ws.send(JSON.stringify({ room: MP.room, role: MP.role, ...payload }));
+  }
+
+  function applyRoomState(msg) {
+    MP.peers = msg.count || 0;
+    MP.roles = msg.roles || {};
+    MP.ready = msg.ready || {};
+    MP.readyAll = !!msg.readyAll;
+    state.netPeers = MP.peers;
+    const helm = MP.roles.helm ? "掌舵在线" : "等掌舵";
+    const nav = MP.roles.navigator ? "航海士在线" : "等航海士";
+    MP.status = `${helm} · ${nav}`;
+    if (msg.latestSnapshotId) MP.lastSnapshotId = Math.max(MP.lastSnapshotId, msg.latestSnapshotId);
+  }
+
+  function toggleReady() {
+    if (!MP.enabled || !MP.connected) return;
+    MP.readyLocal = !MP.readyLocal;
+    sendNet({ type: "ready", ready: MP.readyLocal });
+    setMessage(MP.readyLocal ? "已准备" : "取消准备", 0.55);
+  }
+
+  function sanitizeRoom(value) {
+    return String(value || "test").trim().replace(/[^\w-]/g, "-").slice(0, 32) || "test";
+  }
+
+  function normalizeRelayUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const withProtocol = raw.startsWith("ws://") || raw.startsWith("wss://")
+      ? raw
+      : `${location.protocol === "https:" ? "wss://" : "ws://"}${raw}`;
+    return withProtocol.endsWith("/ws") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/ws`;
+  }
+
+  function modeUrl(role, room = roomInput?.value) {
+    const params = new URLSearchParams();
+    params.set("room", sanitizeRoom(room));
+    params.set("role", role);
+    const relay = normalizeRelayUrl(relayInput?.value);
+    if (relay) params.set("relay", relay);
+    return `${location.pathname}?${params.toString()}`;
+  }
+
+  function updateRoomLinks() {
+    if (!roomLinks) return;
+    const room = sanitizeRoom(roomInput?.value);
+    const relay = normalizeRelayUrl(relayInput?.value) || "当前域名 /ws";
+    roomLinks.textContent = `中继 ${relay}  ·  掌舵手 ${modeUrl("helm", room)}  ·  航海士 ${modeUrl("navigator", room)}`;
+  }
+
+  function hideModeMenu() {
+    if (modeMenu) modeMenu.hidden = true;
+  }
+
+  function showModeMenu() {
+    if (!modeMenu) return;
+    modeMenu.hidden = false;
+    updateRoomLinks();
+  }
+
+  function bindModeMenu() {
+    if (!modeMenu) return;
+    soloBtn?.addEventListener("click", () => {
+      MP.enabled = false;
+      MP.role = "helm";
+      MP.room = "";
+      MP.status = "单人航行";
+      state.netStatus = "单人航行";
+      hideModeMenu();
+      resetRun();
+    });
+    helmBtn?.addEventListener("click", () => {
+      location.href = modeUrl("helm");
+    });
+    navigatorBtn?.addEventListener("click", () => {
+      location.href = modeUrl("navigator");
+    });
+    roomInput?.addEventListener("input", updateRoomLinks);
+    relayInput?.addEventListener("input", updateRoomLinks);
+  }
+
+  function initNetworkFromQuery() {
+    const params = new URLSearchParams(location.search);
+    const room = sanitizeRoom(params.get("room"));
+    const role = params.get("role");
+    MP.relayUrl = normalizeRelayUrl(params.get("relay"));
+    if (relayInput && MP.relayUrl) relayInput.value = MP.relayUrl;
+    if (!room || !["helm", "navigator", "versus"].includes(role || "")) {
+      MP.enabled = false;
+      MP.status = "单人航行";
+      state.netStatus = "单人航行";
+      return;
+    }
+
+    MP.enabled = true;
+    MP.room = room;
+    MP.role = role;
+    state.netStatus = "联机准备";
+    connectNetwork();
+  }
+
+  function connectNetwork() {
+    if (!MP.enabled) return;
+    try {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const relayUrl = MP.relayUrl || `${proto}//${location.host}/ws`;
+      MP.ws = new WebSocket(relayUrl);
+      MP.status = "连接中";
+      MP.ws.addEventListener("open", () => {
+        MP.connected = true;
+        MP.status = "已连接";
+        state.netStatus = "已连接";
+        sendNet({ type: "join" });
+        if (MP.role !== "helm") sendNet({ type: "request_snapshot" });
+      });
+      MP.ws.addEventListener("close", () => {
+        MP.connected = false;
+        MP.status = "已断开";
+        state.netStatus = "已断开";
+      });
+      MP.ws.addEventListener("message", event => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (msg.type === "joined" || msg.type === "room_state" || msg.type === "peers") {
+          applyRoomState(msg);
+        } else if (msg.type === "play_card" && MP.role === "helm") {
+          playNavigatorCard(msg.kind, msg.cardId || "remote");
+        } else if (msg.type === "card_status" && (MP.role === "navigator" || MP.role === "versus")) {
+          updateCardResult(msg.cardId, msg.kind, false, "请求中", null);
+        } else if (msg.type === "card_result" && (MP.role === "navigator" || MP.role === "versus")) {
+          updateCardResult(msg.cardId, msg.kind, msg.accepted, msg.reason, msg.material);
+        } else if (msg.type === "snapshot" && MP.role !== "helm") {
+          if (msg.snapshotId && msg.snapshotId <= MP.lastSnapshotId && msg.reason !== "request") return;
+          MP.lastSnapshotId = Math.max(MP.lastSnapshotId, Number(msg.snapshotId || 0));
+          applySnapshot(msg.snapshot);
+        } else if (msg.type === "request_snapshot" && MP.role === "helm") {
+          sendNet({ type: "snapshot", snapshot: snapshotGame(), snapshotId: ++MP.snapshotSeq });
+        } else if (msg.type === "event") {
+          // 轻量事件目前只作为状态提示使用，快照负责最终同步。
+          if (msg.event === "card_accepted") setMessage("掌舵端已执行布场", 0.55);
+        }
+      });
+    } catch (err) {
+      MP.status = "连接失败";
+      state.netStatus = "连接失败";
+    }
+  }
+
+  function updateNetwork(dt) {
+    if (!MP.enabled) return;
+    if (!MP.connected && MP.ws && MP.ws.readyState === WebSocket.CLOSED) {
+      MP.reconnectTimer += dt;
+      if (MP.reconnectTimer >= MP.reconnectDelay) {
+        MP.reconnectTimer = 0;
+        connectNetwork();
+      }
+    }
+    if (MP.role === "helm" && MP.connected) {
+        MP.lastSnapshot += dt;
+        if (MP.lastSnapshot >= MP.snapshotEvery) {
+          MP.lastSnapshot = 0;
+        sendNet({ type: "snapshot", snapshot: snapshotGame(), snapshotId: ++MP.snapshotSeq });
+      }
+    }
+    for (let i = MP.pendingCards.length - 1; i >= 0; i--) {
+      MP.pendingCards[i].timer -= dt;
+      if (MP.pendingCards[i].timer <= 0) MP.pendingCards.splice(i, 1);
+    }
+  }
+
+
+  function initBoard() {
+    pins.length = 0;
+    bumpers.length = 0;
+    pockets.length = 0;
+    rails.length = 0;
+    anchors.length = 0;
+    driftBoards.length = 0;
+    boardPreviews.length = 0;
+
+    const startY = FIELD.y + 112;
+    const rowGap = 40;
+    const colGap = 58;
+    let id = 0;
+    for (let row = 0; row < 9; row++) {
+      const y = startY + row * rowGap;
+      const offset = row % 2 ? colGap / 2 : 0;
+      for (let col = 0; col < 12; col++) {
+        const x = FIELD.x + 78 + col * colGap + offset;
+        if (x > FIELD.r - 134 || x < FIELD.x + 46) continue;
+        const laneMouth = x > FIELD.r - 220 && y < FIELD.y + 178;
+        const centerHarbor = x > FIELD.x + 318 && x < FIELD.x + 486 && y > FIELD.y + 330;
+        const lowerPocketClear = y > FIELD.b - 210 && (
+          Math.abs(x - (FIELD.x + 98)) < 54 ||
+          Math.abs(x - (FIELD.x + 238)) < 52 ||
+          Math.abs(x - (FIELD.x + 390)) < 74 ||
+          Math.abs(x - (FIELD.x + 540)) < 52 ||
+          Math.abs(x - (FIELD.x + 688)) < 54
+        );
+        if (laneMouth || centerHarbor || lowerPocketClear) continue;
+        const kind = row % 4 === 1 && col % 4 === 0 ? "brass" : row % 5 === 3 && col % 5 === 2 ? "tide" : "pin";
+        pins.push({ id: id++, x, y, r: kind === "pin" ? 5.4 : 6.5, kind, hit: 0, hp: pinHp(kind), cracked: false, broken: false, anchorable: true });
+      }
+    }
+
+    const anchorPinLayout = [
+      [154, 408], [262, 438], [344, 402], [436, 402],
+      [518, 438], [626, 408], [216, 486], [390, 476], [564, 486]
+    ];
+    for (const [x, y] of anchorPinLayout) {
+      pins.push({ id: id++, x: FIELD.x + x, y: FIELD.y + y, r: 7, kind: "anchor", hit: 0, hp: pinHp("anchor"), cracked: false, broken: false, anchorable: true });
+    }
+
+    bumpers.push({ x: FIELD.x + 236, y: FIELD.y + 250, r: 28, label: "灯塔", value: 520, hit: 0, anchorable: true });
+    bumpers.push({ x: FIELD.x + 534, y: FIELD.y + 250, r: 28, label: "船钟", value: 620, hit: 0, anchorable: true });
+    bumpers.push({ x: FIELD.x + 390, y: FIELD.y + 336, r: 36, label: "潮眼", value: 860, hit: 0, anchorable: true });
+    bumpers.push({ x: FIELD.x + 184, y: FIELD.y + 430, r: 22, label: "浮标", value: 360, hit: 0, anchorable: true });
+    bumpers.push({ x: FIELD.x + 596, y: FIELD.y + 430, r: 22, label: "浮标", value: 360, hit: 0, anchorable: true });
+
+    pockets.push({ x: FIELD.x + 98, y: FIELD.b - 48, r: 24, label: "补给", value: 2600, heat: -16, tide: 16, kind: "supply", pulse: 0 });
+    pockets.push({ x: FIELD.x + 238, y: FIELD.b - 58, r: 21, label: "港口", value: 4200, heat: -8, tide: 20, kind: "port", pulse: 0 });
+    pockets.push({ x: FIELD.x + 390, y: FIELD.b - 76, r: 28, label: "锚泊", value: 15000, heat: -20, tide: 50, kind: "anchor", pulse: 0 });
+    pockets.push({ x: FIELD.x + 540, y: FIELD.b - 58, r: 21, label: "宝箱", value: 5200, heat: 8, tide: 25, kind: "treasure", pulse: 0 });
+    pockets.push({ x: FIELD.x + 688, y: FIELD.b - 48, r: 24, label: "风暴", value: 7800, heat: 22, tide: 24, kind: "storm", pulse: 0 });
+    pockets.push({ x: FIELD.r - 105, y: FIELD.y + 360, r: 18, label: "回航", value: 3600, heat: -10, tide: 18, kind: "return", pulse: 0 });
+
+    rail(FIELD.r - 92, FIELD.y + 92, FIELD.r - 48, FIELD.y + 118, 8, 0.74, "lane");
+    rail(FIELD.r - 52, FIELD.y + 112, FIELD.r - 52, FIELD.b - 116, 8, 0.65, "lane");
+
+    rail(FIELD.x + 58, FIELD.b - 168, FIELD.x + 198, FIELD.b - 122, 8, 0.76, "harbor");
+    rail(FIELD.x + 282, FIELD.b - 98, FIELD.x + 356, FIELD.b - 142, 7, 0.70, "harbor");
+    rail(FIELD.x + 424, FIELD.b - 142, FIELD.x + 498, FIELD.b - 98, 7, 0.70, "harbor");
+    rail(FIELD.r - 58, FIELD.b - 168, FIELD.r - 198, FIELD.b - 122, 8, 0.76, "harbor");
+    state.totalBreakablePins = Math.max(1, pins.filter(p => p.kind === "pin" || p.kind === "brass").length);
+  }
+
+  function rail(x1, y1, x2, y2, w, bounce, kind) {
+    rails.push({ x1, y1, x2, y2, w, bounce, kind, hit: 0 });
+  }
+
+  function resetRun() {
+    state.score = 0;
+    state.displayScore = 0;
+    state.target = 72000;
+    state.ballsLeft = 16;
+    state.heat = 10;
+    state.tide = 0;
+    state.tideTimer = 0;
+    state.combo = 0;
+    state.comboTimer = 0;
+    state.power = 0;
+    state.charging = false;
+    state.launchCooldown = 0;
+    state.anchorEnergy = 100;
+    state.anchorCooldown = 0;
+    state.anchorUses = 0;
+    state.anchorMode = "SHORT";
+    state.anchorAim = false;
+    state.anchorAimTarget = null;
+    state.anchorAimQuality = 0;
+    state.anchorSnapStrength = 0;
+    state.perfectAnchorStreak = 0;
+    state.lastAnchorQuality = "";
+    state.brokenPins = 0;
+    state.modeFlash = 0;
+    state.lastAnchorMode = "SHORT";
+    state.aimX = FIELD.x + FIELD.w * 0.5;
+    state.aimY = FIELD.y + FIELD.h * 0.45;
+    state.wave = 1;
+    state.shake = 0;
+    state.phase = 0;
+    state.seaOffsetX = 0;
+    state.seaOffsetY = 0;
+    state.seaRoll = 0;
+    state.seaCurrentX = 0;
+    state.seaLift = 0;
+    state.stormPulse = 0;
+    state.gameOver = false;
+    state.won = false;
+    state.navigatorMaterial = 3;
+    state.navigatorCooldown = 0;
+    state.navigatorComboGrant = 0;
+    state.freeAnchorCharges = 0;
+    state.freeAnchorTimer = 0;
+    state.boardSeq = 0;
+    state.netStatus = MP.enabled ? MP.status : "单人航行";
+    state.netPeers = MP.peers || 0;
+    started = false;
+    paused = false;
+    showIntro = true;
+    ball.x = LANE_X;
+    ball.y = FIELD.b - 34;
+    ball.vx = 0;
+    ball.vy = 0;
+    ball.dead = true;
+    ball.inLane = true;
+    ball.anchor = null;
+    ball.trail.length = 0;
+    particles.length = 0;
+    floats.length = 0;
+    rings.length = 0;
+    anchorFx.length = 0;
+    initBoard();
+    setMessage("待命出航", 1);
+  }
+
+  function launchBall(power) {
+    if (state.gameOver || paused || state.launchCooldown > 0 || state.ballsLeft <= 0) return;
+    if (!ball.dead) return;
+    const p = clamp(power, 0.12, 1);
+    const sweet = p > 0.52 && p < 0.68;
+    ball.x = LANE_X;
+    ball.y = FIELD.b - 34;
+    ball.vx = 0;
+    ball.vy = -(1650 + p * 780);
+    ball.r = sweet ? 10.5 : 10;
+    ball.dead = false;
+    ball.inLane = true;
+    ball.anchor = null;
+    ball.trail.length = 0;
+    ball.age = 0;
+    ball.sweet = sweet;
+    state.ballsLeft -= 1;
+    awardNavigatorResource(2, "新一球补给");
+    state.launchCooldown = 0.3;
+    started = true;
+    showIntro = false;
+    state.anchorEnergy = Math.min(100, state.anchorEnergy + 22);
+    state.shake = Math.max(state.shake, 4);
+    addParticles(ball.x, ball.y, sweet ? 18 : 11, sweet ? 150 : 90, sweet ? palette.blue : palette.foam, 3);
+    addRing(ball.x, ball.y, sweet ? 30 : 20, sweet ? palette.blue : palette.foam, 0.25);
+    addWaterRipple(ball.x, ball.y, sweet ? 0.95 : 0.7);
+    setMessage(sweet ? "完美出航" : "起锚出航", 0.85);
+    beep(sweet ? 640 : 420, 0.055, 0.028, "square");
+  }
+
+  function addScore(base, x, y, label = "", extraMul = 1) {
+    const tideMul = state.tideTimer > 0 ? 2 : 1;
+    const comboMul = 1 + Math.min(state.combo, 30) * 0.045;
+    const sweetMul = ball.sweet ? 1.12 : 1;
+    const anchorMul = ball.anchor ? 1.18 : 1;
+    const growthMul = scoreGrowthMultiplier();
+    const gain = Math.max(1, Math.round(base * tideMul * comboMul * sweetMul * anchorMul * growthMul * extraMul));
+    state.score += gain;
+    if (state.score > state.high) {
+      state.high = state.score;
+      localStorage.setItem("anchor_maiden_proto_high", String(state.high));
+    }
+    addFloat(label ? `${label} +${gain}` : `+${gain}`, x, y, gain >= 9000 ? palette.brass : palette.foam, gain >= 9000 ? 24 : 15);
+    if (state.score >= state.target && !state.won) {
+      state.won = true;
+      addFloat("目标达成", FIELD.x + FIELD.w / 2, FIELD.y + 92, palette.brass, 34);
+      setMessage("航线达成", 1.6);
+      state.shake = Math.max(state.shake, 8);
+    }
+  }
+
+  function bumpCombo(v = 1) {
+    state.combo += v;
+    state.comboTimer = 2.1;
+    const navMilestone = Math.floor(state.combo / 6);
+    if (navMilestone > state.navigatorComboGrant) {
+      state.navigatorComboGrant = navMilestone;
+      awardNavigatorResource(1, "连击补给");
+    }
+    state.tide = clamp(state.tide + v * 1.4, 0, 100);
+    if (state.tide >= 100 && state.tideTimer <= 0) triggerTideRush();
+  }
+
+  function triggerTideRush() {
+    state.tide = 0;
+    state.tideTimer = 8;
+    state.anchorEnergy = 100;
+    awardNavigatorResource(2, "潮汐狂涌");
+    state.shake = Math.max(state.shake, 10);
+    setMessage("潮汐狂涌：整机浮航", 1.6);
+    addFloat("潮汐狂涌", FIELD.x + FIELD.w / 2, FIELD.y + 112, palette.foam, 42);
+    addFloat("海浪托举", FIELD.x + FIELD.w / 2, FIELD.b - 150, palette.blue, 22);
+    for (let i = 0; i < 14; i++) {
+      addRing(rnd(FIELD.x + 80, FIELD.r - 80), rnd(FIELD.y + 120, FIELD.b - 130), rnd(14, 42), palette.foam, rnd(0.24, 0.52));
+    }
+    beep(820, 0.12, 0.04, "square");
+    window.setTimeout(() => beep(1180, 0.09, 0.03, "square"), 85);
+  }
+
+  function overheat() {
+    state.heat = 62;
+    state.combo = 0;
+    resetNavigatorComboGrant();
+    state.anchorEnergy = Math.max(0, state.anchorEnergy - 35);
+    state.shake = Math.max(state.shake, 12);
+    setMessage("风暴来袭：海况失稳", 1.2);
+    addFloat("风暴反噬", PANEL.x + PANEL.w / 2, PANEL.y + 322, palette.red, 22);
+    addParticles(FIELD.x + FIELD.w / 2, FIELD.y + 210, 35, 180, palette.foam, 3);
+    beep(120, 0.2, 0.04, "triangle");
+  }
+
+  function anchorType() {
+    return ANCHOR_TYPES[state.anchorMode] || ANCHOR_TYPES.SHORT;
+  }
+
+  function breakProgress() {
+    return clamp(state.brokenPins / Math.max(1, state.totalBreakablePins || 1), 0, 1);
+  }
+
+  function scoreGrowthMultiplier() {
+    return 1 + 1.15 * Math.pow(breakProgress(), 1.35);
+  }
+
+  function anchorReachBonus() {
+    return clamp((scoreGrowthMultiplier() - 1) * 0.34, 0, 0.42);
+  }
+
+  function tunedAnchorType(type = anchorType()) {
+    const bonus = anchorReachBonus();
+    const rangeWeight = type.key === "SHORT" ? 0.72 : type.key === "HEAVY" ? 0.92 : 1.08;
+    const coneWeight = type.key === "SHORT" ? 0.30 : type.key === "HEAVY" ? 0.34 : 0.26;
+    const snapWeight = type.key === "SHORT" ? 0.55 : 0;
+    return {
+      ...type,
+      baseRange: type.range,
+      baseCone: type.cone,
+      baseSnap: type.snap || 0,
+      range: type.range * (1 + bonus * rangeWeight),
+      cone: type.cone * (1 + bonus * coneWeight),
+      snap: type.snap ? type.snap * (1 + bonus * snapWeight) : type.snap,
+      growthBonus: bonus
+    };
+  }
+
+  function aimVector() {
+    const dx = state.aimX - ball.x;
+    const dy = state.aimY - ball.y;
+    const d = Math.max(1, Math.hypot(dx, dy));
+    return { x: dx / d, y: dy / d, d };
+  }
+
+  function aimIntentPoint(type, aim, range) {
+    const intentD = type.key === "SHORT" ? clamp(aim.d, type.minLen, range) : range;
+    return {
+      x: clamp(ball.x + aim.x * intentD, FIELD.x + 18, FIELD.r - 18),
+      y: clamp(ball.y + aim.y * intentD, FIELD.y + 18, FIELD.b - 18),
+      d: intentD
+    };
+  }
+
+  function angleBetween(ax, ay, bx, by) {
+    const dot = clamp(ax * bx + ay * by, -1, 1);
+    return Math.acos(dot) * 180 / Math.PI;
+  }
+
+  function targetWeight(type) {
+    if (type === "anchor") return 0.62;
+    if (type === "bumper") return 0.72;
+    if (type === "port") return 0.8;
+    if (type === "brass" || type === "tide") return 1.04;
+    return 1.28;
+  }
+
+  function pinHp(kind) {
+    return kind === "brass" ? 2 : kind === "pin" ? 1 : 99;
+  }
+
+  function damagePin(p, type, amount = 1) {
+    if (!p || p.broken) return false;
+    if (p.kind !== "pin" && p.kind !== "brass") {
+      p.hit = Math.max(p.hit, 0.4);
+      return false;
+    }
+    p.hp = Math.max(0, (p.hp ?? pinHp(p.kind)) - amount);
+    p.hit = Math.max(p.hit, 0.48);
+    if (p.hp > 0) {
+      p.cracked = true;
+      addScore(type.pinCrackScore || 80, p.x, p.y, "CRACK");
+      addParticles(p.x, p.y, 6, 75, p.kind === "brass" ? palette.brass : palette.foam, 2);
+      return false;
+    }
+    breakPin(p, type);
+    return true;
+  }
+
+  function breakPin(p, type) {
+    p.broken = true;
+    p.anchorable = false;
+    p.hit = 0;
+    state.brokenPins += 1;
+    addScore((type.pinBreakScore || 220) * (p.kind === "brass" ? 1.65 : 1), p.x, p.y, "BREAK");
+    addParticles(p.x, p.y, p.kind === "brass" ? 14 : 10, p.kind === "brass" ? 145 : 115, p.kind === "brass" ? palette.brass : palette.foam, 2.4);
+    addRing(p.x, p.y, p.kind === "brass" ? 22 : 17, type.color, 0.22);
+  }
+
+  const ANCHOR_TARGET_LABELS = {
+    pin: "铁钉",
+    brass: "黄铜钉",
+    tide: "潮汐钉",
+    anchor: "锚钉",
+    bumper: "浮标",
+    port: "港口",
+    return: "回航点",
+    board: "航障"
+  };
+
+  function anchorTargetName(target) {
+    if (!target) return "无锚点";
+    return ANCHOR_TARGET_LABELS[target.type] || "锚点";
+  }
+
+  function anchorQualityLabel(q) {
+    if (q >= 0.88) return "完美";
+    if (q >= 0.72) return "精准";
+    if (q >= 0.52) return "可用";
+    return "勉强";
+  }
+
+  function anchorRangeFor(type) {
+    return state.tideTimer > 0 ? type.range + 42 * (1 + (type.growthBonus || 0) * 0.55) : type.range;
+  }
+
+  function anchorCandidateList(type = tunedAnchorType()) {
+    const scan = [];
+    for (const p of pins) {
+      if (p.anchorable && !p.broken) scan.push({ x: p.x, y: p.y, r: p.r, type: p.kind, obj: p });
+    }
+    for (const b of bumpers) {
+      if (b.anchorable) scan.push({ x: b.x, y: b.y, r: b.r, type: "bumper", obj: b });
+    }
+    for (const p of pockets) {
+      if (p.kind === "anchor" || p.kind === "port") scan.push({ x: p.x, y: p.y, r: p.r, type: p.kind, obj: p });
+    }
+    for (const b of driftBoards) {
+      if (!b.broken) scan.push({ x: b.x, y: b.y, r: Math.max(b.w, b.h) * 0.38, type: "board", obj: b });
+    }
+    return scan.filter(t => type.key !== "RETURN" || ["anchor", "port", "bumper"].includes(t.type));
+  }
+
+  function heavyBlastStats(x, y, type) {
+    const radius = type.blastRadius || 72;
+    let breakable = 0;
+    let cracked = 0;
+    let weighted = 0;
+    for (const p of pins) {
+      if (p.broken || (p.kind !== "pin" && p.kind !== "brass")) continue;
+      const d = dist(x, y, p.x, p.y);
+      if (d > radius) continue;
+      const edge = clamp(1 - d / radius, 0, 1);
+      const damage = Math.max(1, Math.round((type.pinDamage || 1) * (0.7 + edge)));
+      if ((p.hp ?? pinHp(p.kind)) <= damage) breakable += 1;
+      else cracked += 1;
+      weighted += (p.kind === "brass" ? 1.55 : 1) * (0.45 + edge);
+    }
+    return { breakable, cracked, weighted };
+  }
+
+  function enrichAnchorTarget(target, type, aim, intent, range) {
+    if (!target) return null;
+    const pointerD = dist(intent.x, intent.y, target.x, target.y);
+    const angleScore = 1 - clamp((target.angle || 0) / Math.max(1, type.cone), 0, 1);
+    const rangeScore = 1 - clamp(target.d / Math.max(1, range), 0, 1);
+    const snap = (type.snap || 54) + Math.min(14, target.r * 0.5);
+    const pointerScore = 1 - clamp(pointerD / Math.max(1, type.key === "SHORT" ? snap : range * 0.36), 0, 1);
+    const specialBonus = target.type === "brass" ? 0.05 : target.type === "tide" ? 0.06 : target.type === "anchor" ? 0.08 : target.type === "port" ? 0.07 : target.type === "bumper" ? 0.04 : 0;
+    let quality = 0.18 + angleScore * 0.28 + pointerScore * 0.38 + rangeScore * 0.10 + specialBonus;
+    if (type.key === "HEAVY") {
+      const blast = heavyBlastStats(target.x, target.y, type);
+      target.blastStats = blast;
+      quality += clamp(blast.weighted / 7, 0, 0.18);
+    }
+    if (type.key === "RETURN") {
+      const danger = clamp((ball.y - (FIELD.b - 230)) / 210, 0, 1);
+      const upward = target.y < ball.y ? 0.08 : -0.04;
+      quality += danger * 0.12 + upward;
+    }
+    if (target.virtual) quality = Math.max(quality, type.key === "RETURN" ? 0.62 : 0.45);
+    target.pointerD = pointerD;
+    target.quality = clamp(quality, 0, 1);
+    target.qualityLabel = anchorQualityLabel(target.quality);
+    target.name = anchorTargetName(target);
+    target.snapStrength = pointerScore;
+    return target;
+  }
+
+  function nearestAnchorTarget() {
+    let best = null;
+    const type = tunedAnchorType();
+    const aim = aimVector();
+    const range = anchorRangeFor(type);
+    const intent = aimIntentPoint(type, aim, range);
+    const growthFocus = clamp(type.growthBonus / 0.42, 0, 1);
+    const scan = anchorCandidateList(type);
+
+    for (const t of scan) {
+      const d = dist(ball.x, ball.y, t.x, t.y);
+      if (d > range) continue;
+      const vx = (t.x - ball.x) / Math.max(1, d);
+      const vy = (t.y - ball.y) / Math.max(1, d);
+      const angle = angleBetween(aim.x, aim.y, vx, vy);
+      const pointerD = dist(intent.x, intent.y, t.x, t.y);
+
+      if (type.key === "SHORT") {
+        const snap = (type.snap || 54) + Math.min(14, t.r * 0.5);
+        const closePointer = pointerD <= Math.max(36, snap * 0.72);
+        if (pointerD > snap) continue;
+        if (angle > type.cone * 1.12 && !closePointer) continue;
+        const anglePenalty = angle > type.cone ? (angle - type.cone) * 1.2 : angle * 0.34;
+        const score = pointerD * 3.05 + anglePenalty + Math.abs(d - intent.d) * 0.18 + targetWeight(t.type) * 15;
+        if (!best || score < best.score) best = { ...t, d, angle, pointerD, score, virtual: false };
+        continue;
+      }
+
+      if (angle > type.cone) continue;
+      const aimLeansLeft = intent.x < FIELD.x + FIELD.w * 0.44;
+      const targetIsLeft = t.x < FIELD.x + FIELD.w * 0.38;
+      const leftAimAssist = aimLeansLeft && targetIsLeft ? -24 * growthFocus : 0;
+      const blast = type.key === "HEAVY" ? heavyBlastStats(t.x, t.y, type) : { breakable: 0, cracked: 0, weighted: 0 };
+      const rescueBias = type.key === "RETURN" && ball.y > FIELD.b - 220 && t.y < ball.y ? -40 : 0;
+      const score =
+        d * targetWeight(t.type) * (1 - growthFocus * 0.45) +
+        pointerD * (0.55 + growthFocus * 1.35) +
+        angle * (2.6 - growthFocus * 0.75) +
+        leftAimAssist + rescueBias - blast.weighted * 18;
+      if (!best || score < best.score) best = { ...t, d, angle, pointerD, score, virtual: false, blastStats: blast };
+    }
+
+    if (!best && type.virtualTarget) {
+      const d = Math.min(type.virtualDistance * (1 + type.growthBonus * 0.55), Math.max(120, aim.d));
+      const x = clamp(ball.x + aim.x * d, FIELD.x + 36, FIELD.r - 108);
+      const y = clamp(ball.y + aim.y * d, FIELD.y + 60, FIELD.b - 92);
+      best = {
+        x,
+        y,
+        r: 16,
+        type: "return",
+        obj: null,
+        d: dist(ball.x, ball.y, x, y),
+        angle: 0,
+        pointerD: dist(intent.x, intent.y, x, y),
+        score: 0,
+        virtual: true
+      };
+    }
+
+    best = enrichAnchorTarget(best, type, aim, intent, range);
+    return best;
+  }
+
+  function beginAnchorAim() {
+    ensureAudio();
+    if (state.gameOver || paused || ball.dead || ball.inLane) return;
+    if (ball.anchor) {
+      releaseAnchor(true);
+      return;
+    }
+    const type = tunedAnchorType();
+    const freeReady = hasFreeAnchor();
+    if (state.anchorCooldown > 0 || (!freeReady && state.anchorEnergy < type.cost)) {
+      setMessage(state.anchorCooldown > 0 ? "绞盘回收中" : "绞盘张力不足", 0.8);
+      beep(140, 0.05, 0.02, "triangle");
+      return;
+    }
+    state.anchorAim = true;
+    state.anchorAimTarget = nearestAnchorTarget();
+    state.anchorAimQuality = state.anchorAimTarget ? state.anchorAimTarget.quality || 0 : 0;
+    state.anchorSnapStrength = state.anchorAimTarget ? state.anchorAimTarget.snapStrength || 0 : 0;
+    const hint = type.key === "SHORT" ? "短链瞄准" : type.key === "HEAVY" ? "重锚瞄准" : "回航瞄准";
+    setMessage(hint, 0.32);
+  }
+
+  function cancelAnchorAim() {
+    state.anchorAim = false;
+    state.anchorAimTarget = null;
+    state.anchorAimQuality = 0;
+    state.anchorSnapStrength = 0;
+    state.perfectAnchorStreak = 0;
+    state.lastAnchorQuality = "";
+  }
+
+  function castAnchor() {
+    if (!state.anchorAim || state.gameOver || paused || ball.dead || ball.inLane || ball.anchor) return;
+    const type = tunedAnchorType();
+    const target = nearestAnchorTarget();
+    state.anchorAimTarget = target;
+    state.anchorAimQuality = target ? target.quality || 0 : 0;
+    state.anchorSnapStrength = target ? target.snapStrength || 0 : 0;
+    if (!target) {
+      setMessage("没有有效锚点", 0.8);
+      addFloat("无锚点", ball.x, ball.y - 28, palette.gray, 14);
+      beep(180, 0.055, 0.018, "triangle");
+      cancelAnchorAim();
+      return;
+    }
+
+    const quality = clamp(target.quality || 0.45, 0, 1);
+    const perfect = quality >= 0.82;
+    const precise = quality >= 0.66;
+    const dx = ball.x - target.x;
+    const dy = ball.y - target.y;
+    const rawLen = Math.hypot(dx, dy);
+    const maxLenBase = state.tideTimer > 0 ? type.maxLen + 40 : type.maxLen;
+    const maxLen = maxLenBase * (1 + type.growthBonus * (type.key === "SHORT" ? 0.35 : 0.55));
+    const len = type.key === "SHORT"
+      ? clamp(rawLen - (type.slack || 0) * 0.8, type.minLen, maxLen)
+      : clamp(rawLen, type.minLen, maxLen);
+
+    ball.anchor = {
+      x: target.x,
+      y: target.y,
+      len,
+      target,
+      anchorType: type.key,
+      life: state.tideTimer > 0 ? type.life + 0.45 : type.life,
+      max: state.tideTimer > 0 ? type.life + 0.45 : type.life,
+      spin: dx * ball.vy - dy * ball.vx >= 0 ? 1 : -1,
+      pull: 1,
+      taut: 0,
+      tautPeak: 0,
+      tautScored: false,
+      perfectTautScored: false,
+      virtual: target.virtual,
+      quality,
+      qualityLabel: target.qualityLabel,
+      perfect,
+      lockedName: anchorTargetName(target)
+    };
+
+    const usedFreeAnchor = consumeFreeAnchor(type);
+    if (!usedFreeAnchor) {
+      state.anchorEnergy -= type.cost;
+      if (perfect) state.anchorEnergy = clamp(state.anchorEnergy + Math.round(type.cost * 0.18), 0, 100);
+    }
+    if (perfect) awardNavigatorResource(1, "完美锚点");
+    state.anchorCooldown = usedFreeAnchor ? 0.05 : perfect ? 0.08 : precise ? 0.12 : 0.18;
+    state.anchorUses += 1;
+    state.lastAnchorQuality = target.qualityLabel;
+    state.perfectAnchorStreak = perfect ? state.perfectAnchorStreak + 1 : 0;
+
+    if (target.obj) target.obj.hit = perfect ? 0.62 : precise ? 0.48 : 0.38;
+    addAnchorFx(ball.x, ball.y, target, type);
+    addRing(target.x, target.y, target.r + (perfect ? 30 : precise ? 23 : 18), type.color, perfect ? 0.45 : 0.32);
+    addParticles(target.x, target.y, type.key === "HEAVY" ? (perfect ? 34 : 24) : (perfect ? 24 : 16), type.key === "HEAVY" ? 170 : 125, type.color, perfect ? 3.6 : 3);
+    addWaterRipple(target.x, target.y, type.key === "HEAVY" ? 1.45 : 1.05);
+
+    const lockLabel = perfect ? `完美${type.label}` : precise ? `精准${type.label}` : type.label;
+    addScore(type.lockScore, target.x, target.y, lockLabel, perfect ? 1.55 : precise ? 1.22 : 1);
+    bumpCombo((type.key === "HEAVY" ? 1.7 : 1.1) + (perfect ? 0.8 : precise ? 0.35 : 0));
+
+    if (type.key === "HEAVY") {
+      const hx = (target.x - ball.x) / Math.max(1, dist(ball.x, ball.y, target.x, target.y));
+      const hy = (target.y - ball.y) / Math.max(1, dist(ball.x, ball.y, target.x, target.y));
+      const blastType = perfect ? {
+        ...type,
+        blastRadius: (type.blastRadius || 86) + 16,
+        pinDamage: (type.pinDamage || 1) + 1,
+        pinBreakScore: Math.round((type.pinBreakScore || 240) * 1.18),
+        pinCrackScore: Math.round((type.pinCrackScore || 90) * 1.18)
+      } : type;
+      ball.vx = ball.vx * (type.hookBrake || 0.45) + hx * (type.hookImpulse || 320) * (perfect ? 1.12 : 1);
+      ball.vy = ball.vy * (type.hookBrake || 0.45) + hy * (type.hookImpulse || 320) * (perfect ? 1.12 : 1);
+      state.shake = Math.max(state.shake, perfect ? 15 : 11);
+      heavyAnchorBlast(target.x, target.y, blastType);
+    }
+
+    if (type.key === "RETURN" && perfect) {
+      ball.vy -= 120;
+      state.heat = clamp(state.heat - 6, 0, 100);
+      addFloat("救援拉升", ball.x, ball.y - 34, palette.foam, 16);
+      strainGuardBoardsByReturnAnchor(ball.anchor);
+    }
+
+    setMessage(`${target.qualityLabel}锁定：${anchorTargetName(target)}`, 0.95);
+    cancelAnchorAim();
+    beep(type.key === "HEAVY" ? 220 : 300, perfect ? 0.09 : 0.07, perfect ? 0.032 : 0.026, "square");
+    window.setTimeout(() => beep(type.key === "RETURN" ? 720 : 560, 0.05, 0.022, "square"), 55);
+    if (perfect) window.setTimeout(() => beep(920, 0.045, 0.018, "square"), 115);
+  }
+
+  function heavyAnchorBlast(x, y, type) {
+    const radius = type.blastRadius || 72;
+    let broken = 0;
+    for (const p of pins) {
+      if (p.broken) continue;
+      const d = dist(x, y, p.x, p.y);
+      if (d < radius) {
+        p.hit = Math.max(p.hit, 0.35);
+        if (p.kind === "pin" || p.kind === "brass") {
+          const edge = clamp(1 - d / radius, 0, 1);
+          if (damagePin(p, type, Math.max(1, Math.round((type.pinDamage || 1) * (0.7 + edge))))) broken += 1;
+        }
+        if (d > 2) {
+          ball.vx += (ball.x - p.x) / d * 2;
+          ball.vy += (ball.y - p.y) / d * 2;
+        }
+      }
+    }
+    for (const b of bumpers) {
+      if (dist(x, y, b.x, b.y) < radius + b.r) {
+        b.hit = Math.max(b.hit, 0.4);
+        addScore(180, b.x, b.y, "冲击");
+      }
+    }
+    state.shake = Math.max(state.shake, 9);
+    if (broken > 0) {
+      state.anchorEnergy = clamp(state.anchorEnergy + broken * 3, 0, 100);
+      bumpCombo(broken * 0.35);
+      addFloat(`BROKEN x${broken}`, x, y - radius - 14, palette.brass, 16);
+    }
+    addRing(x, y, radius, type.color, 0.4);
+    addWaterRipple(x, y, 1.45);
+  }
+
+  function releaseAnchor(manual = false) {
+    if (!ball.anchor) return;
+    const a = ball.anchor;
+    const type = ANCHOR_TYPES[a.anchorType] || ANCHOR_TYPES.SHORT;
+    const dx = ball.x - a.x;
+    const dy = ball.y - a.y;
+    const d = Math.max(1, Math.hypot(dx, dy));
+    const nx = dx / d;
+    const ny = dy / d;
+    const tx = -ny * a.spin;
+    const ty = nx * a.spin;
+    const speed = Math.hypot(ball.vx, ball.vy);
+    const taut = clamp(a.tautPeak || a.taut || 0, 0, 1);
+    const ropeBonus = type.key === "SHORT" ? lerp(0.55, 1.25, taut) : 1;
+    const qualityBonus = 1 + clamp((a.quality || 0.5) - 0.5, -0.25, 0.5) * 0.38 + (a.perfect ? 0.18 : 0);
+    const boost = ((manual ? type.releaseBoost : type.autoReleaseBoost) + clamp(speed * type.speedScale, 0, type.speedBonusMax)) * ropeBonus * qualityBonus;
+
+    if (type.key === "RETURN") {
+      ball.vx = ball.vx * 0.45 + tx * boost + nx * type.radialBoost;
+      ball.vy = Math.min(ball.vy * 0.35 + ty * boost - type.radialBoostY * (a.perfect ? 1.22 : 1), 780);
+    } else if (type.key === "HEAVY") {
+      ball.vx = ball.vx * 0.72 + tx * boost + nx * type.radialBoost;
+      ball.vy = ball.vy * 0.72 + ty * boost + ny * type.radialBoostY;
+    } else {
+      ball.vx += tx * boost + nx * type.radialBoost;
+      ball.vy += ty * boost + ny * type.radialBoostY;
+    }
+
+    const releaseLabel = manual && a.perfect && taut > 0.62 ? "完美甩链" : manual ? type.label + "甩出" : type.label + "释放";
+    ball.anchor = null;
+    state.anchorCooldown = Math.max(0.08, type.recoil * (a.perfect ? 0.76 : 1));
+    state.shake = Math.max(state.shake, manual ? (a.perfect ? 10 : 7) : 4);
+    addScore(manual ? 640 : 420, ball.x, ball.y, releaseLabel, a.perfect ? 1.35 : 1);
+    if (manual && a.perfect) {
+      state.anchorEnergy = clamp(state.anchorEnergy + 6, 0, 100);
+      bumpCombo(0.55);
+    }
+    addRing(ball.x, ball.y, manual ? (a.perfect ? 48 : 38) : 26, type.color, 0.28);
+    addWaterRipple(ball.x, ball.y, manual ? 1.15 : 0.85);
+    addParticles(ball.x, ball.y, manual ? (a.perfect ? 28 : 20) : 12, manual ? 170 : 120, type.color, 3);
+    setMessage(releaseLabel, 0.85);
+    beep(manual ? (a.perfect ? 780 : 700) : 520, 0.055, 0.028, "square");
+  }
+
+  function nudge(dir) {
+    if (state.gameOver || paused || ball.dead || ball.inLane) return;
+    ball.vx += dir * 84;
+    state.heat = clamp(state.heat + 2.2, 0, 100);
+    state.shake = Math.max(state.shake, 3);
+    addFloat(dir < 0 ? "左舵" : "右舵", FIELD.x + FIELD.w / 2, FIELD.y + 44, palette.foam, 13);
+  }
+
+  function missBall() {
+    if (ball.dead) return;
+    if (!ball.anchor && state.anchorEnergy >= 85 && ball.y < FIELD.b + 55 && state.ballsLeft >= 0) {
+      const t = pockets.find(p => p.kind === "return");
+      if (t && dist(ball.x, ball.y, t.x, t.y) < 210) {
+        state.anchorEnergy = 0;
+        ball.x = t.x - 22;
+        ball.y = t.y - 40;
+        ball.vx = -220;
+        ball.vy = -520;
+        state.combo = 0;
+        addFloat("自动回航", t.x, t.y - 20, palette.blue, 18);
+        addRing(t.x, t.y, 42, palette.blue, 0.35);
+        setMessage("自动回航", 0.9);
+        beep(600, 0.07, 0.026, "triangle");
+        return;
+      }
+    }
+    ball.dead = true;
+    ball.inLane = true;
+    ball.anchor = null;
+    ball.trail.length = 0;
+    state.combo = 0;
+    resetNavigatorComboGrant();
+    state.heat = clamp(state.heat + 13, 0, 100);
+    state.power = 0;
+    state.charging = false;
+    addParticles(ball.x, FIELD.b, 16, 90, palette.gray, 3);
+    addFloat("落海", ball.x, FIELD.b - 34, palette.gray, 18);
+    setMessage(state.ballsLeft > 0 ? "下一次出航" : "航程结束", 0.9);
+    beep(160, 0.07, 0.022, "triangle");
+    if (state.ballsLeft <= 0) {
+      state.gameOver = true;
+      addFloat(state.won ? "航线完成" : "航线失败", FIELD.x + FIELD.w / 2, FIELD.y + 210, state.won ? palette.brass : palette.foam, 36);
+    }
+  }
+
+  function captureBall(pocket) {
+    if (ball.dead) return;
+    let value = pocket.value;
+    if (pocket.kind === "anchor" && state.anchorUses > 0) value += state.anchorUses * 900;
+    if (pocket.kind === "storm" && state.heat > 70) value *= 1.6;
+    if (pocket.kind === "supply") {
+      state.ballsLeft += 1;
+      awardNavigatorResource(2, "补给入港");
+    }
+    if (pocket.kind === "anchor") state.anchorEnergy = 100;
+    pocket.pulse = 0.55;
+    state.heat = clamp(state.heat + pocket.heat, 0, 100);
+    state.tide = clamp(state.tide + pocket.tide, 0, 100);
+    addScore(value, pocket.x, pocket.y, pocket.label, pocket.kind === "anchor" ? 1.15 : 1);
+    bumpCombo(pocket.kind === "anchor" ? 6 : 2);
+    addParticles(pocket.x, pocket.y, pocket.kind === "anchor" ? 32 : 18, pocket.kind === "anchor" ? 210 : 130, pocket.kind === "storm" ? palette.coral : palette.foam, 3);
+    addRing(pocket.x, pocket.y, pocket.r + 28, pocket.kind === "anchor" ? palette.brass : palette.foam, 0.36);
+    addWaterRipple(pocket.x, pocket.y, pocket.kind === "anchor" ? 1.7 : 1.15);
+    if (state.tide >= 100 && state.tideTimer <= 0) triggerTideRush();
+    ball.dead = true;
+    ball.inLane = true;
+    ball.anchor = null;
+    ball.trail.length = 0;
+    state.power = 0;
+    state.charging = false;
+    setMessage(pocket.kind === "anchor" ? "锚泊港" : "靠港", 0.95);
+    beep(pocket.kind === "anchor" ? 860 : 520, 0.08, 0.032, "square");
+  }
+
+  function circleCollision(obj, ox, oy, or, rest = 0.82, boost = 0.2) {
+    const dx = obj.x - ox;
+    const dy = obj.y - oy;
+    let d = Math.hypot(dx, dy);
+    const min = obj.r + or;
+    if (d < 0.001) d = 0.001;
+    if (d >= min) return false;
+    const nx = dx / d;
+    const ny = dy / d;
+    const overlap = min - d;
+    obj.x += nx * overlap;
+    obj.y += ny * overlap;
+    const dot = obj.vx * nx + obj.vy * ny;
+    if (dot < 0) {
+      obj.vx -= (1 + rest) * dot * nx;
+      obj.vy -= (1 + rest) * dot * ny;
+      obj.vx += nx * boost;
+      obj.vy += ny * boost;
+    }
+    return true;
+  }
+
+  function railCollision(obj, r) {
+    const vx = r.x2 - r.x1;
+    const vy = r.y2 - r.y1;
+    const len2 = vx * vx + vy * vy || 1;
+    const t = clamp(((obj.x - r.x1) * vx + (obj.y - r.y1) * vy) / len2, 0, 1);
+    const px2 = r.x1 + vx * t;
+    const py2 = r.y1 + vy * t;
+    const dx = obj.x - px2;
+    const dy = obj.y - py2;
+    let d = Math.hypot(dx, dy);
+    const min = obj.r + r.w;
+    if (d >= min) return false;
+    let nx;
+    let ny;
+    if (d < 0.001) {
+      const len = Math.sqrt(len2);
+      nx = -vy / len;
+      ny = vx / len;
+      d = 0.001;
+    } else {
+      nx = dx / d;
+      ny = dy / d;
+    }
+    obj.x += nx * (min - d);
+    obj.y += ny * (min - d);
+    const dot = obj.vx * nx + obj.vy * ny;
+    if (dot < 0) {
+      obj.vx -= (1 + r.bounce) * dot * nx;
+      obj.vy -= (1 + r.bounce) * dot * ny;
+    }
+    r.hit = 0.18;
+    return true;
+  }
+
+  function updateBall(dt) {
+    if (isNetworkNavigator()) return;
+    if (ball.dead) return;
+    ball.age += dt;
+    const subSteps = Math.max(1, Math.ceil(Math.hypot(ball.vx, ball.vy) * dt / 8));
+    const sdt = dt / subSteps;
+    for (let step = 0; step < subSteps; step++) {
+      if (ball.dead) break;
+      const gravity = ball.inLane ? 1120 : 735;
+      ball.vy += gravity * sdt;
+      ball.vx *= Math.pow(0.992, sdt * 60);
+      ball.vy *= Math.pow(0.996, sdt * 60);
+
+      if (!ball.inLane) {
+        const tideMix = tideLevel();
+        const drift = Math.sin(state.phase * 1.04 + ball.y * 0.012) * (8 + tideMix * 18);
+        const lift = Math.max(0, Math.sin(state.phase * 1.8 + ball.x * 0.01 - 0.3)) * (2 + tideMix * 10);
+        const gust = Math.sin(state.phase * 3.8 + ball.y * 0.022) * (state.stormPulse * 18);
+        ball.vx += (drift * 0.22 + gust * 0.18) * sdt;
+        ball.vy -= lift * 0.28 * sdt;
+      }
+
+      if (ball.anchor) updateAnchor(sdt);
+
+      ball.x += ball.vx * sdt;
+      ball.y += ball.vy * sdt;
+
+      if (ball.inLane) {
+        ball.x = LANE_X;
+        if (ball.y < FIELD.y + 34) {
+          ball.inLane = false;
+          ball.x = FIELD.r - 58;
+          ball.y = FIELD.y + 72;
+          ball.vx = -(290 + Math.abs(ball.vy) * 0.14);
+          ball.vy = 120 + Math.abs(ball.vy) * 0.035;
+          addParticles(ball.x, ball.y, 8, 110, palette.foam, 2);
+        }
+        if (ball.y > FIELD.b + 40) missBall();
+        continue;
+      }
+
+      collideWalls();
+
+      for (const r of rails) {
+        if (railCollision(ball, r)) {
+          addScore(r.kind === "center" ? 45 : 25, ball.x, ball.y);
+          bumpCombo(0.15);
+          if (chance(0.18)) addParticles(ball.x, ball.y, 3, 70, palette.foam, 2);
+        }
+      }
+
+      for (const bd of driftBoards) {
+        collideBoard(ball, bd);
+      }
+
+      for (const p of pins) {
+        if (p.broken) continue;
+        if (circleCollision(ball, p.x, p.y, p.r, p.kind === "anchor" ? 0.9 : 0.8, p.kind === "anchor" ? 0.55 : 0.16)) {
+          p.hit = 0.18;
+          const base = p.kind === "brass" ? 85 : p.kind === "tide" ? 55 : p.kind === "anchor" ? 130 : 20;
+          if (chance(p.kind === "anchor" ? 0.65 : 0.22)) addScore(base, p.x, p.y, p.kind === "anchor" ? "锚钉" : "");
+          bumpCombo(p.kind === "anchor" ? 0.36 : 0.08);
+          if (p.kind === "tide") state.tide = clamp(state.tide + 0.7, 0, 100);
+          if (chance(0.22)) addParticles(ball.x, ball.y, 3, 68, p.kind === "brass" ? palette.brass : palette.foam, 2);
+        }
+      }
+
+      for (const b of bumpers) {
+        if (circleCollision(ball, b.x, b.y, b.r, 1.04, 1.15)) {
+          b.hit = 0.28;
+          addScore(b.value, b.x, b.y, b.label);
+          bumpCombo(1.2);
+          state.anchorEnergy = clamp(state.anchorEnergy + 8, 0, 100);
+          state.tide = clamp(state.tide + 2.2, 0, 100);
+          addRing(b.x, b.y, b.r + 18, palette.foam, 0.24);
+          addWaterRipple(b.x, b.y, 0.95);
+          addParticles(ball.x, ball.y, 12, 115, palette.foam, 2.5);
+          beep(480 + b.value * 0.2, 0.035, 0.02, "square");
+        }
+      }
+
+      for (const p of pockets) {
+        const d = dist(ball.x, ball.y, p.x, p.y);
+        const activeR = p.r + (p.kind === "anchor" && state.tideTimer > 0 ? 18 : 0);
+        const attract = activeR * (p.kind === "anchor" ? 3.2 : 2.25);
+        if (d < attract && d > 1) {
+          const pull = (p.kind === "anchor" ? 34 : 14) * (1 - d / attract) * (state.tideTimer > 0 ? 1.45 : 1);
+          ball.vx += (p.x - ball.x) / d * pull * sdt;
+          ball.vy += (p.y - ball.y) / d * pull * sdt;
+        }
+        if (d < activeR * 0.62 || (d < activeR + ball.r * 0.35 && ball.vy > -80)) {
+          captureBall(p);
+          break;
+        }
+      }
+
+      if (ball.y > FIELD.b + 32) missBall();
+      const sp = Math.hypot(ball.vx, ball.vy);
+      const maxV = 1760;
+      if (sp > maxV) {
+        ball.vx = ball.vx / sp * maxV;
+        ball.vy = ball.vy / sp * maxV;
+      }
+      if (!Number.isFinite(ball.x) || !Number.isFinite(ball.y)) missBall();
+    }
+
+    ball.trail.push({ x: ball.x, y: ball.y, life: 0.28 });
+    for (const t of ball.trail) t.life -= dt;
+    while (ball.trail.length && ball.trail[0].life <= 0) ball.trail.shift();
+  }
+
+  function activeAnchorFxAt(x, y) {
+    for (let i = anchorFx.length - 1; i >= 0; i--) {
+      const fx = anchorFx[i];
+      const t = 1 - fx.life / fx.max;
+      if (t < fx.travel / fx.max) continue;
+      if (dist(x, y, fx.x, fx.y) < fx.r + 4) return fx;
+    }
+    return null;
+  }
+
+  function updateAnchor(dt) {
+    const a = ball.anchor;
+    const type = ANCHOR_TYPES[a.anchorType] || ANCHOR_TYPES.SHORT;
+    a.life -= dt;
+    const dx = a.x - ball.x;
+    const dy = a.y - ball.y;
+    const d = Math.max(1, Math.hypot(dx, dy));
+    const nx = dx / d;
+    const ny = dy / d;
+    const tx = -ny * a.spin;
+    const ty = nx * a.spin;
+
+    if (type.key === "SHORT") {
+      const slack = type.slack || 0;
+      const stretch = d - a.len;
+      const taut = clamp((stretch - slack) / Math.max(1, slack), 0, 1);
+      a.taut = taut;
+      a.tautPeak = Math.max(a.tautPeak || 0, taut);
+      if (taut > 0) {
+        const warm = 1 - clamp(a.life / a.max, 0, 1);
+        const qualityPull = 1 + clamp((a.quality || 0.5) - 0.5, -0.2, 0.5) * 0.28;
+        const pull = (type.pull * (0.28 + warm * 0.34 + taut * 0.78) + Math.max(0, stretch - slack) * type.stretch) * qualityPull;
+        const radialSpeed = ball.vx * nx + ball.vy * ny;
+        ball.vx += nx * pull * dt + tx * type.tangent * taut * dt;
+        ball.vy += ny * pull * dt + ty * type.tangent * taut * dt;
+        if (radialSpeed < 0) {
+          ball.vx -= nx * radialSpeed * type.ropeDamping * taut * dt;
+          ball.vy -= ny * radialSpeed * type.ropeDamping * taut * dt;
+        }
+        if (!a.tautScored && taut > 0.55) {
+          a.tautScored = true;
+          addScore(type.tautScore || 420, ball.x, ball.y, a.perfect ? "精准牵引" : "拉紧", a.perfect ? 1.28 : 1);
+          addRing(ball.x, ball.y, 26, type.color, 0.22);
+        }
+        if (a.perfect && !a.perfectTautScored && taut > 0.78) {
+          a.perfectTautScored = true;
+          state.anchorEnergy = clamp(state.anchorEnergy + 8, 0, 100);
+          addScore(720, ball.x, ball.y, "完美牵引", 1.2);
+          addFloat("能量 +8", ball.x, ball.y - 42, type.color, 13);
+          addRing(ball.x, ball.y, 38, type.color, 0.28);
+        }
+        strainBoardsByShortAnchor(a, taut);
+      }
+      if (d > a.len + slack) {
+        const limit = a.len + slack;
+        const px2 = a.x - nx * limit;
+        const py2 = a.y - ny * limit;
+        ball.x = lerp(ball.x, px2, type.ropeConstraint || 0.55);
+        ball.y = lerp(ball.y, py2, type.ropeConstraint || 0.55);
+        const radial = ball.vx * nx + ball.vy * ny;
+        if (radial < 0) {
+          ball.vx -= radial * nx * 0.82;
+          ball.vy -= radial * ny * 0.82;
+        }
+      }
+      state.heat = clamp(state.heat + dt * type.heatRate * (0.45 + taut * (a.perfect ? 0.75 : 1)), 0, 100);
+      if (a.life <= 0) releaseAnchor(false);
+      return;
+    }
+
+    const stretch = d - a.len;
+    const warm = 1 - clamp(a.life / a.max, 0, 1);
+    const qualityPull = 1 + clamp((a.quality || 0.5) - 0.5, -0.2, 0.5) * (type.key === "RETURN" ? 0.22 : 0.12);
+    const pull = ((type.pull * (0.42 + warm * 0.58)) + Math.max(0, stretch) * type.stretch) * qualityPull;
+    ball.vx += nx * pull * dt + tx * type.tangent * dt;
+    ball.vy += ny * pull * dt + ty * type.tangent * dt;
+    if (d > a.len) {
+      const px2 = a.x - nx * a.len;
+      const py2 = a.y - ny * a.len;
+      ball.x = px2;
+      ball.y = py2;
+      const radial = ball.vx * nx + ball.vy * ny;
+      if (radial < 0) {
+        ball.vx -= radial * nx;
+        ball.vy -= radial * ny;
+      }
+    }
+    if (a.perfect && type.key === "RETURN" && ball.vy > -240) ball.vy -= 22 * dt;
+    state.heat = clamp(state.heat + dt * type.heatRate * (a.perfect ? 0.82 : 1), 0, 100);
+    if (a.life <= 0) releaseAnchor(false);
+  }
+
+  function collideWalls() {
+    const left = FIELD.x + 18;
+    const right = FIELD.r - 18;
+    const top = FIELD.y + 20;
+    if (ball.x - ball.r < left) {
+      ball.x = left + ball.r;
+      ball.vx = Math.abs(ball.vx) * 0.78;
+      addParticles(ball.x, ball.y, 3, 45, palette.gray, 2);
+    }
+    if (ball.x + ball.r > right) {
+      ball.x = right - ball.r;
+      ball.vx = -Math.abs(ball.vx) * 0.78;
+      addParticles(ball.x, ball.y, 3, 45, palette.gray, 2);
+    }
+    if (ball.y - ball.r < top) {
+      ball.y = top + ball.r;
+      ball.vy = Math.abs(ball.vy) * 0.72;
+    }
+  }
+
+  function update(dt) {
+    if (paused) return;
+    state.phase += dt * (state.tideTimer > 0 ? 7.5 : 2.4);
+    state.glass = (state.glass + dt * 80) % 320;
+    waterAnim.timer += dt;
+    if (waterAnim.timer >= 1 / 18) {
+      waterAnim.timer -= 1 / 18;
+      waterAnim.frame += 1;
+    }
+    state.displayScore = lerp(state.displayScore, state.score, 1 - Math.pow(0.001, dt));
+    state.shake = Math.max(0, state.shake - dt * 28);
+    state.launchCooldown = Math.max(0, state.launchCooldown - dt);
+    state.anchorCooldown = Math.max(0, state.anchorCooldown - dt);
+    state.messageTimer = Math.max(0, state.messageTimer - dt);
+    state.modeFlash = Math.max(0, state.modeFlash - dt);
+    const tideMix = tideLevel();
+    state.seaOffsetX = Math.sin(state.phase * 0.52) * (0.8 + tideMix * 2.8);
+    state.seaOffsetY = Math.sin(state.phase * 0.86 + 0.5) * (0.6 + tideMix * 3.2);
+    state.seaRoll = Math.sin(state.phase * 0.41) * (0.002 + tideMix * 0.0065);
+    state.seaCurrentX = Math.sin(state.phase * 0.92) * (8 + tideMix * 18);
+    state.seaLift = Math.max(0, Math.sin(state.phase * 1.75 - 0.4)) * tideMix * 18;
+    state.stormPulse = clamp((state.heat - 55) / 45, 0, 1);
+    maiden.blink = (maiden.blink + dt) % 4.7;
+    if (state.anchorAim) {
+      state.anchorAimTarget = nearestAnchorTarget();
+      state.anchorAimQuality = state.anchorAimTarget ? state.anchorAimTarget.quality || 0 : 0;
+      state.anchorSnapStrength = state.anchorAimTarget ? state.anchorAimTarget.snapStrength || 0 : 0;
+    } else {
+      state.anchorAimQuality = 0;
+      state.anchorSnapStrength = 0;
+    }
+
+    if (state.charging && ball.dead && !state.gameOver) {
+      state.power += state.chargeDir * dt * 0.78;
+      if (state.power >= 1) {
+        state.power = 1;
+        state.chargeDir = -1;
+      }
+      if (state.power <= 0) {
+        state.power = 0;
+        state.chargeDir = 1;
+      }
+    }
+
+    if (state.comboTimer > 0) {
+      state.comboTimer -= dt;
+      if (state.comboTimer <= 0) {
+        state.combo = 0;
+        resetNavigatorComboGrant();
+      }
+    }
+
+    if (state.tideTimer > 0) {
+      state.tideTimer -= dt;
+      if (state.tideTimer <= 0) {
+        state.tideTimer = 0;
+        setMessage("潮汐回落", 0.8);
+      }
+    } else if (!ball.dead) {
+      state.heat = clamp(state.heat + dt * 0.42, 0, 100);
+    } else {
+      state.heat = clamp(state.heat - dt * 4.5, 0, 100);
+    }
+
+    state.anchorEnergy = clamp(state.anchorEnergy + dt * (ball.dead ? 8 : 3.2), 0, 100);
+    updateBoardSystem(dt);
+    updateNetwork(dt);
+    if (state.heat >= 100) overheat();
+
+    for (const p of pins) p.hit = Math.max(0, p.hit - dt);
+    for (const b of bumpers) b.hit = Math.max(0, b.hit - dt);
+    for (const p of pockets) p.pulse = Math.max(0, p.pulse - dt);
+    for (const r of rails) r.hit = Math.max(0, r.hit - dt);
+
+    updateBall(dt);
+    updateFx(dt);
+  }
+
+  function updateFx(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 180 * dt;
+      p.vx *= Math.pow(0.82, dt);
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    for (let i = floats.length - 1; i >= 0; i--) {
+      const f = floats[i];
+      f.life -= dt;
+      f.y += f.vy * dt;
+      f.vy *= Math.pow(0.52, dt);
+      if (f.life <= 0) floats.splice(i, 1);
+    }
+    for (let i = rings.length - 1; i >= 0; i--) {
+      rings[i].life -= dt;
+      if (rings[i].life <= 0) rings.splice(i, 1);
+    }
+    for (let i = anchorFx.length - 1; i >= 0; i--) {
+      anchorFx[i].life -= dt;
+      if (anchorFx[i].life <= 0) anchorFx.splice(i, 1);
+    }
+    updateRipples(dt);
+  }
+
+  function draw() {
+    drawBackground();
+    const sx = state.shake ? Math.round(rnd(-state.shake, state.shake) * 0.45) : 0;
+    const sy = state.shake ? Math.round(rnd(-state.shake, state.shake) * 0.25) : 0;
+    const aiming = state.anchorAim && !ball.dead && !ball.inLane && !ball.anchor;
+
+    const cx = CAB.x + CAB.w / 2;
+    const cy = CAB.y + CAB.h / 2;
+
+    ctx.save();
+    ctx.translate(cx + state.seaOffsetX, cy + state.seaOffsetY);
+    ctx.rotate(state.seaRoll);
+    ctx.translate(-cx, -cy);
+
+    drawCabinetShell();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(FIELD.x, FIELD.y, FIELD.w, FIELD.h);
+    ctx.clip();
+    ctx.translate(sx, sy);
+    if (aiming) {
+      const zoom = 1.055;
+      const focusX = clamp(ball.x, FIELD.x + 170, FIELD.r - 170);
+      const focusY = clamp(ball.y, FIELD.y + 130, FIELD.b - 130);
+      ctx.translate(focusX, focusY);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-focusX, -focusY);
+    }
+    drawPlayfield();
+    drawAnchorAim();
+    drawModeSwitchFlash();
+    drawAnchorLine();
+    drawBall();
+    drawEffects();
+    ctx.restore();
+
+    drawPanel();
+    drawOverlay();
+    ctx.restore();
+
+    if (aiming) drawAimVignette();
+  }
+
+  function drawBackground() {
+    drawHashWater(0, 0, W, H, 8, 0.95, false);
+  }
+
+  function drawHashWater(x, y, w, h, cell = 14, alpha = 1, light = false) {
+    const key = light ? "field" : "deep";
+    const cache = waterCache[key] || (waterCache[key] = createWaterCache(w, h, light));
+    const frame = waterAnim.frame;
+    if (cache.w !== Math.ceil(w / cell) || cache.h !== Math.ceil(h / cell) || cache.frame !== frame) {
+      renderWaterCache(cache, w, h, cell, light, frame);
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(cache.canvas, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    drawOceanFoamBands(x, y, w, h, alpha, light);
+    ctx.restore();
+  }
+
+  function createWaterCache(w, h, light) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.ceil(w / (light ? 6 : 8)));
+    c.height = Math.max(1, Math.ceil(h / (light ? 6 : 8)));
+    return { canvas: c, ctx: c.getContext("2d"), w: 0, h: 0, frame: -1, img: null };
+  }
+
+  function renderWaterCache(cache, w, h, cell, light, frame) {
+    const cw = Math.max(1, Math.ceil(w / cell));
+    const ch = Math.max(1, Math.ceil(h / cell));
+    if (cache.canvas.width !== cw) cache.canvas.width = cw;
+    if (cache.canvas.height !== ch) cache.canvas.height = ch;
+    cache.w = cw;
+    cache.h = ch;
+    cache.frame = frame;
+    const cctx = cache.ctx;
+    if (!cache.img || cache.img.width !== cw || cache.img.height !== ch) {
+      cache.img = cctx.createImageData(cw, ch);
+    }
+    const img = cache.img;
+    const data = img.data;
+    const t = frame * 0.062;
+    const shallow = light ? [165, 210, 197] : [4, 24, 30];
+    const mid = light ? [96, 158, 160] : [6, 54, 66];
+    const deep = light ? [58, 116, 132] : [1, 11, 18];
+    const hi = light ? [190, 252, 235] : [56, 160, 176];
+    const foam = light ? [240, 255, 244] : [145, 225, 222];
+    for (let yy = 0; yy < ch; yy++) {
+      for (let xx = 0; xx < cw; xx++) {
+        const wx = xx * cell;
+        const wy = yy * cell;
+        const u = w > 0 ? wx / w : 0;
+        const vpos = h > 0 ? wy / h : 0;
+        const n1 = valueNoise(wx / 138 + t * 0.55, wy / 96 - t * 0.36, 17);
+        const n2 = valueNoise(wx / 54 - t * 1.1, wy / 44 + t * 0.84, 91);
+        const n3 = valueNoise(wx / 18 + t * 2.6, wy / 22 - t * 2.1, 211);
+
+        const p1 = wx * 0.017 + wy * 0.041 + t * 1.25;
+        const p2 = wx * -0.033 + wy * 0.024 + t * 1.65;
+        const p3 = wx * 0.075 + wy * -0.048 + t * 3.4 + n2 * 1.8;
+        const p4 = wx * 0.12 + wy * 0.085 - t * 4.1;
+        const swell = Math.sin(p1) * 0.48 + Math.sin(p2) * 0.28;
+        const chop = Math.sin(p3) * 0.16 + Math.sin(p4) * 0.08;
+        const height = swell + chop + (n1 - 0.5) * 0.36;
+        const slope = Math.abs(Math.cos(p1) * 0.48 + Math.cos(p2) * 0.28 + Math.cos(p3) * 0.22);
+        const crest = Math.pow(clamp((height + slope * 0.62 + n3 * 0.34 - 0.72) / 0.58, 0, 1), 2.2);
+        const trough = clamp((-height + 0.45) / 1.4, 0, 1);
+        const depthShade = clamp(vpos * 0.76 + (1 - u) * 0.12 + trough * 0.22, 0, 1);
+        const body = clamp(0.44 + height * 0.28 + n2 * 0.24 - depthShade * 0.34, 0, 1);
+        const sparkle = Math.pow(clamp(n3 + crest * 0.72 + slope * 0.26 - 0.82, 0, 1), 2.4);
+        const foamLine = crest > (light ? 0.48 : 0.58) && hash2(xx, yy, frame + 73) > (light ? 0.30 : 0.44) ? crest : 0;
+        const dither = (hash2(xx, yy, 801) - 0.5) * (light ? 7 : 5);
+        const idx = (yy * cw + xx) * 4;
+        let r = lerp(lerp(deep[0], mid[0], body), shallow[0], clamp(body * 0.65 + (1 - depthShade) * 0.18, 0, 1));
+        let g = lerp(lerp(deep[1], mid[1], body), shallow[1], clamp(body * 0.65 + (1 - depthShade) * 0.18, 0, 1));
+        let b = lerp(lerp(deep[2], mid[2], body), shallow[2], clamp(body * 0.65 + (1 - depthShade) * 0.18, 0, 1));
+        r = lerp(r, hi[0], sparkle * (light ? 0.45 : 0.28));
+        g = lerp(g, hi[1], sparkle * (light ? 0.48 : 0.34));
+        b = lerp(b, hi[2], sparkle * (light ? 0.42 : 0.32));
+        r = lerp(r, foam[0], foamLine * (light ? 0.78 : 0.62));
+        g = lerp(g, foam[1], foamLine * (light ? 0.78 : 0.62));
+        b = lerp(b, foam[2], foamLine * (light ? 0.78 : 0.62));
+        data[idx] = Math.round(clamp(r + dither, 0, 255));
+        data[idx + 1] = Math.round(clamp(g + dither, 0, 255));
+        data[idx + 2] = Math.round(clamp(b + dither, 0, 255));
+        data[idx + 3] = 255;
+      }
+    }
+    cctx.putImageData(img, 0, 0);
+  }
+
+  function drawOceanFoamBands(x, y, w, h, alpha, light) {
+    const bands = light ? 13 : 18;
+    const colorA = light ? "#e8fff0" : "#78cfd2";
+    const colorB = light ? "#68b8bd" : "#1f7f8b";
+    ctx.globalAlpha = (light ? 0.20 : 0.28) * alpha;
+    for (let i = 0; i < bands; i++) {
+      const baseY = y + 24 + i * (light ? 42 : 38);
+      const speed = state.phase * (light ? 0.62 : 0.42);
+      const drift = Math.sin(i * 1.7 + speed) * (light ? 18 : 28);
+      for (let sx = x + 8; sx < x + w - 10; sx += light ? 26 : 32) {
+        const n = hash2((sx / 13 + i * 19) | 0, (waterAnim.frame / 3) | 0, light ? 311 : 619);
+        if (n < (light ? 0.45 : 0.56)) continue;
+        const yy = baseY + Math.sin(sx * 0.018 + i * 0.9 + speed) * (light ? 7 : 10) + drift * 0.2;
+        const len = (light ? 9 : 13) + Math.floor(n * (light ? 22 : 30));
+        const col = n > 0.82 ? colorA : colorB;
+        px(sx + drift, yy, len, n > 0.82 ? 2 : 1, col);
+        if (n > 0.88) px(sx + drift + len + 4, yy + 3, Math.max(4, len * 0.35), 1, col);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCabinetShell() {
+    rect(CAB.x, CAB.y, CAB.w, CAB.h, "#e6e0ca", palette.black, 5);
+    rect(CAB.x + 10, CAB.y + 10, CAB.w - 20, CAB.h - 20, "#17262b", palette.black, 3);
+    drawFieldFrame();
+    rect(PANEL.x - 16, PANEL.y - 16, PANEL.w + 32, PANEL.h + 32, "#d8d3be", palette.black, 4);
+    text("ANCHOR MAIDEN", FIELD.x, CAB.y + 9, 18, palette.foam, "left");
+    text("SEA ROUTE", FIELD.x + 178, CAB.y + 12, 12, palette.brass, "left");
+    text(themedReadyLabel(), FIELD.r - 6, CAB.y + 10, 14, state.tideTimer > 0 ? palette.brass : state.heat > 72 ? palette.coral : palette.foam, "right");
+    for (let i = 0; i < 42; i++) {
+      const on = state.tideTimer > 0 || (Math.floor(state.phase * 8 + i) % 5 !== 0);
+      px(FIELD.x - 4 + i * 19, FIELD.y - 34, 10, 10, on ? palette.foam : "#736f62");
+    }
+  }
+
+  function drawFieldFrame() {
+    rect(FIELD.x - 16, FIELD.y - 16, FIELD.w + 32, FIELD.h + 32, "#c8aa63", palette.black, 4);
+  }
+
+
+  function drawTideWash() {
+    const tideMix = tideLevel();
+    if (tideMix <= 0.04) return;
+    ctx.save();
+    ctx.globalAlpha = 0.08 + tideMix * 0.16;
+    for (let i = 0; i < 5; i++) {
+      const yy = FIELD.y + 130 + i * 88 + Math.sin(state.phase * 1.15 + i * 0.9) * (4 + tideMix * 10);
+      waveStroke(FIELD.x + 16, yy, FIELD.r - 96, yy + Math.cos(state.phase * 0.7 + i) * (3 + tideMix * 8), 6 + tideMix * 8, i % 2 ? "#d8fff6" : palette.blue, 2);
+    }
+    const surfY = FIELD.b - 116 + Math.sin(state.phase * 2.2) * 5;
+    for (let sx = FIELD.x + 18; sx < FIELD.r - 110; sx += 28) {
+      const bob = Math.sin(state.phase * 3 + sx * 0.018) * (2 + tideMix * 4);
+      px(sx, surfY + bob, 14, 2, "#dffff3");
+      if (state.tideTimer > 0 && (sx / 28) % 2 < 1) px(sx + 10, surfY + bob + 3, 8, 1, palette.foam);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawStormVeil() {
+    const storm = clamp((state.heat - 40) / 60, 0, 1);
+    if (storm <= 0.02) return;
+    ctx.save();
+    const g = ctx.createLinearGradient(FIELD.x, FIELD.y, FIELD.r, FIELD.b);
+    g.addColorStop(0, `rgba(12,20,24,${0.06 + storm * 0.10})`);
+    g.addColorStop(0.55, `rgba(36,42,46,${0.02 + storm * 0.06})`);
+    g.addColorStop(1, `rgba(96,34,28,${storm * 0.12})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(FIELD.x + 4, FIELD.y + 4, FIELD.w - 8, FIELD.h - 8);
+    if (storm > 0.18) {
+      ctx.globalAlpha = 0.10 + storm * 0.12;
+      for (let i = 0; i < 15; i++) {
+        const rx = FIELD.x + 20 + i * 54 + Math.sin(state.phase * 0.7 + i) * 10;
+        const ry = FIELD.y + 18 + (i % 5) * 44;
+        line(rx, ry, rx - 18, ry + 26, storm > 0.75 && i % 4 === 0 ? palette.coral : "#d7ece8", 1);
+      }
+    }
+    if (storm > 0.7) {
+      ctx.globalAlpha = 0.16 + Math.sin(state.phase * 7) * 0.08;
+      px(FIELD.x + 10, FIELD.y + 10, FIELD.w - 20, 4, palette.coral);
+      px(FIELD.x + 10, FIELD.b - 14, FIELD.w - 20, 4, palette.coral);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+
+  function drawTideCurrentGlyphs() {
+    const tideMix = tideLevel();
+    if (tideMix <= 0.05) return;
+    ctx.save();
+    const rush = state.tideTimer > 0 ? 1 : 0;
+    ctx.globalAlpha = 0.10 + tideMix * 0.20;
+    for (let row = 0; row < 6; row++) {
+      const y = FIELD.y + 110 + row * 78 + Math.sin(state.phase * 1.2 + row) * (4 + tideMix * 8);
+      for (let col = 0; col < 6; col++) {
+        const x = FIELD.x + 82 + col * 112 + ((row % 2) ? 34 : 0) + Math.sin(state.phase * 0.8 + col) * 7;
+        const len = 22 + tideMix * 24 + rush * 10;
+        const dy = Math.sin(state.phase * 1.5 + col + row) * (3 + tideMix * 5);
+        line(x, y, x + len, y + dy, tideMix > 0.72 ? palette.foam : palette.blue, 2);
+        px(x + len - 2, y + dy - 3, 7, 2, tideMix > 0.72 ? palette.foam : palette.blue);
+        px(x + len - 2, y + dy + 3, 7, 2, tideMix > 0.72 ? palette.foam : palette.blue);
+      }
+    }
+    if (rush) {
+      ctx.globalAlpha = 0.18 + Math.sin(state.phase * 8) * 0.06;
+      for (let i = 0; i < 4; i++) {
+        drawPixelRing(FIELD.x + 190 + i * 160, FIELD.b - 120 + Math.sin(state.phase + i) * 8, 32 + i * 3, palette.foam, 18, 2, state.phase * 0.8 + i);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawStormPressureGlyphs() {
+    const storm = clamp((state.heat - 35) / 65, 0, 1);
+    if (storm <= 0.04) return;
+    ctx.save();
+    const wind = 0.10 + storm * 0.22;
+    ctx.globalAlpha = wind;
+    for (let i = 0; i < 12; i++) {
+      const x = FIELD.x + 34 + ((i * 67 + Math.floor(state.phase * 34)) % (FIELD.w - 140));
+      const y = FIELD.y + 44 + (i % 6) * 78 + Math.sin(state.phase * 2 + i) * 14;
+      line(x, y, x - 24 - storm * 26, y + 10 + storm * 16, storm > 0.78 && i % 3 === 0 ? palette.coral : "#d7ece8", storm > 0.75 ? 2 : 1);
+    }
+    if (storm > 0.72) {
+      const flash = Math.max(0, Math.sin(state.phase * 11));
+      ctx.globalAlpha = 0.08 + flash * 0.16;
+      rect(FIELD.x + 7, FIELD.y + 7, FIELD.w - 14, FIELD.h - 14, null, palette.coral, 5);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawPocketBeacons() {
+    const tideMix = tideLevel();
+    const storm = stormLevel();
+    ctx.save();
+    for (const p of pockets) {
+      if (p.kind === "anchor" && tideMix > 0.35) {
+        ctx.globalAlpha = 0.16 + tideMix * 0.18;
+        drawPixelRing(p.x, p.y, p.r + 30 + Math.sin(state.phase * 3) * 4, palette.brass, 20, 2, state.phase * 0.5);
+      }
+      if ((p.kind === "port" || p.kind === "return") && tideMix > 0.45) {
+        ctx.globalAlpha = 0.10 + tideMix * 0.14;
+        waveStroke(p.x - 38, p.y + p.r + 16, p.x + 38, p.y + p.r + 14, 5 + tideMix * 4, palette.foam, 2);
+      }
+      if (p.kind === "storm" && storm > 0.45) {
+        ctx.globalAlpha = 0.12 + storm * 0.22;
+        drawPixelBurst(p.x, p.y, p.r + 30 + storm * 14, palette.coral);
+        if (storm > 0.7) {
+          line(p.x - 16, p.y - 42, p.x + 4, p.y - 18, palette.coral, 3);
+          line(p.x + 4, p.y - 18, p.x - 6, p.y - 18, palette.foam, 2);
+          line(p.x - 6, p.y - 18, p.x + 14, p.y + 10, palette.coral, 3);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawOceanStatusRibbon() {
+    const tideMix = tideLevel();
+    const storm = stormLevel();
+    ctx.save();
+    const x = FIELD.x + 18;
+    const y = FIELD.y + 18;
+    const w = 258;
+    const h = 34;
+    ctx.globalAlpha = 0.82;
+    rect(x, y, w, h, "#102026", palette.black, 2);
+    ctx.globalAlpha = 1;
+    text(seaStateLabel(), x + 12, y + 7, 12, storm > 0.72 ? palette.coral : palette.foam, "left");
+    text(tideStateLabel(), x + w - 12, y + 7, 12, tideMix > 0.65 ? palette.blue : "#cfd7d1", "right");
+    px(x + 12, y + 24, Math.round((w - 24) * storm), 4, palette.coral);
+    px(x + 12, y + 29, Math.round((w - 24) * tideMix), 3, palette.blue);
+    ctx.restore();
+  }
+
+  function drawPlayfield() {
+    rect(FIELD.x, FIELD.y, FIELD.w, FIELD.h, "#d7e2d7", palette.black, 4);
+    drawHashWater(FIELD.x + 4, FIELD.y + 4, FIELD.w - 8, FIELD.h - 8, 6, 0.64, true);
+    drawFieldDepthGradient();
+    drawTideWash();
+    drawTideCurrentGlyphs();
+    drawStormVeil();
+    drawStormPressureGlyphs();
+    ctx.globalAlpha = 0.055;
+    for (let y = FIELD.y + 10; y < FIELD.b; y += 34) {
+      for (let x = FIELD.x + 10; x < FIELD.r; x += 42) {
+        if (hash2((x / 7) | 0, (y / 7) | 0, 503) > 0.70) px(x, y, 3, 2, palette.foam);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    drawWaterRipples();
+    drawSeaLanes();
+    drawPocketBeacons();
+    drawBoardPreviews();
+    drawOceanStatusRibbon();
+    rect(FIELD.r - 78, FIELD.y + 20, 62, FIELD.h - 94, "#17252a", palette.black, 3);
+    line(LANE_X, FIELD.y + 38, LANE_X, FIELD.b - 38, palette.foam, 3);
+    text("出航槽", LANE_X, FIELD.b - 74, 12, palette.foam, "center");
+
+    for (const r of rails) drawRail(r);
+    for (const p of pockets) drawPocket(p);
+    for (const p of pins) if (!p.broken) drawPin(p);
+    for (const b of bumpers) drawBumper(b);
+    drawDriftBoards();
+    drawGlass();
+  }
+
+  function drawSeaLanes() {
+    ctx.globalAlpha = 0.18;
+    for (let i = 0; i < 8; i++) {
+      const y = FIELD.y + 92 + i * 54 + Math.sin(state.phase + i) * 3;
+      line(FIELD.x + 24, y, FIELD.r - 110, y + Math.cos(i) * 10, palette.sea, 2);
+    }
+    ctx.globalAlpha = 1;
+    text("缓流航线", FIELD.x + 128, FIELD.b - 142, 11, "#495650", "center");
+    text("风暴航线", FIELD.x + 690, FIELD.b - 142, 11, "#495650", "center");
+    text("避风锚港", FIELD.x + 390, FIELD.b - 152, 11, "#495650", "center");
+  }
+
+  function drawRail(r) {
+    const hot = r.hit > 0;
+    if (r.kind === "harbor") {
+      drawPixelRail(r, palette.brass, hot);
+      return;
+    }
+    drawPixelRail(r, r.kind === "lane" ? palette.brass : "#d9dccd", hot);
+  }
+
+  function drawPixelRail(r, color, hot) {
+    const dx = r.x2 - r.x1;
+    const dy = r.y2 - r.y1;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const nx = dx / len;
+    const ny = dy / len;
+    const step = Math.max(9, Math.round(r.w * 1.18));
+    const link = Math.max(8, Math.round(r.w * 1.2));
+    const inner = Math.max(4, link - 4);
+    for (let d = 0; d <= len; d += step) {
+      const x = r.x1 + nx * d;
+      const y = r.y1 + ny * d;
+      drawRailLink(x, y, link, inner, color, hot);
+    }
+    drawPixelRailCap(r.x1, r.y1, r.w, color, hot);
+    drawPixelRailCap(r.x2, r.y2, r.w, color, hot);
+  }
+
+  function drawRailLink(x, y, link, inner, color, hot) {
+    const ix = Math.round(x - link / 2);
+    const iy = Math.round(y - link / 2);
+    const fill = hot ? "#f2ead1" : color;
+    px(ix, iy, link, link, palette.black);
+    px(ix + 2, iy + 2, inner, inner, fill);
+    if (!hot) {
+      px(ix + 2, iy + inner, inner, 2, "#8f793f");
+      px(ix + inner, iy + 2, 2, inner, "#8f793f");
+      px(ix + 3, iy + 3, Math.max(2, inner - 4), 1, "#e0ca82");
+    }
+  }
+
+  function drawPixelRailCap(x, y, w, color, hot) {
+    const cap = Math.max(10, Math.round(w * 1.45));
+    const core = Math.max(5, Math.round(w * 0.72));
+    const ix = Math.round(x - cap / 2);
+    const iy = Math.round(y - cap / 2);
+    px(ix, iy, cap, cap, palette.black);
+    px(ix + 2, iy + 2, cap - 4, cap - 4, hot ? "#f2ead1" : color);
+    px(Math.round(x - core / 2), Math.round(y - core / 2), core, core, "#17252a");
+    if (!hot) {
+      px(ix + 3, iy + 3, cap - 6, 1, "#e0ca82");
+      px(ix + cap - 4, iy + 3, 1, cap - 6, "#8f793f");
+      px(ix + 3, iy + cap - 4, cap - 6, 1, "#8f793f");
+    } else {
+      px(Math.round(x - 1), Math.round(y - 1), 2, 2, "#f2ead1");
+    }
+  }
+
+  function drawPin(p) {
+    const hot = p.hit > 0;
+    const lockFx = activeAnchorFxAt(p.x, p.y);
+    const anchoredHere = ball.anchor && ball.anchor.target?.obj === p;
+    if (hot) {
+      ctx.globalAlpha = 0.34;
+      drawPixelBurst(p.x, p.y, p.r + 9, p.kind === "brass" ? palette.brass : palette.foam);
+      ctx.globalAlpha = 1;
+    }
+    const sprite = p.kind === "brass" ? pixelSprites.pinBrass : p.kind === "tide" ? pixelSprites.pinTide : p.kind === "anchor" ? pixelSprites.pinAnchor : pixelSprites.pinBlack;
+    const accent = p.kind === "brass" ? palette.brass : p.kind === "tide" ? palette.blue : p.kind === "anchor" ? palette.foam : "#11181b";
+    drawPixelSpriteCentered(sprite, p.x, p.y, hot ? 2.25 : 2, facilitySpriteMap(accent));
+    drawPinDetail(p, hot);
+    if (p.cracked && (p.kind === "pin" || p.kind === "brass")) {
+      px(p.x - 4, p.y - 3, 2, 2, palette.foam);
+      px(p.x - 1, p.y, 2, 2, palette.foam);
+      px(p.x + 2, p.y + 3, 2, 2, palette.black);
+    }
+    if (lockFx) drawAnchorClamp(p.x, p.y, p.r, lockFx);
+    if (anchoredHere) {
+      const type = ANCHOR_TYPES[ball.anchor.anchorType] || ANCHOR_TYPES.SHORT;
+      drawAnchorClamp(p.x, p.y, p.r, { kind: type.key, color: type.color, life: 0.22, lock: 0.34 });
+    }
+  }
+
+  function drawPinDetail(p, hot) {
+    const hi = hot ? palette.foam : "#dfe4d7";
+    if (p.kind === "pin") {
+      px(p.x - 3, p.y - 4, 2, 2, "#4c5555");
+      px(p.x + 1, p.y + 2, 2, 2, palette.black);
+      return;
+    }
+    if (p.kind === "brass") {
+      px(p.x - 4, p.y - 4, 3, 2, "#f1df9b");
+      px(p.x + 2, p.y + 2, 2, 2, "#735f31");
+      return;
+    }
+    if (p.kind === "tide") {
+      pxDiamond(p.x, p.y, 3, palette.blue);
+      px(p.x - 1, p.y - 1, 2, 2, hi);
+      return;
+    }
+    if (p.kind === "anchor") {
+      px(p.x - 1, p.y - 5, 2, 8, palette.black);
+      px(p.x - 5, p.y + 1, 10, 2, palette.black);
+      px(p.x - 5, p.y + 3, 2, 2, palette.black);
+      px(p.x + 3, p.y + 3, 2, 2, palette.black);
+    }
+  }
+
+  function drawBumper(b) {
+    const hot = b.hit > 0 || state.tideTimer > 0;
+    if (hot) {
+      ctx.globalAlpha = b.hit > 0 ? 0.34 : 0.12;
+      drawPixelBurst(b.x, b.y, b.r + 18, palette.foam);
+      ctx.globalAlpha = 1;
+    }
+    drawPixelSpriteCentered(pixelSprites.buoyBumper, b.x, b.y, 5, facilitySpriteMap(b.hit > 0 ? palette.foam : palette.brass));
+    drawBumperIcon(b, hot);
+  }
+
+  function drawBumperIcon(b, hot) {
+    const x = Math.round(b.x);
+    const y = Math.round(b.y);
+    const lit = hot ? palette.foam : palette.deep;
+    px(x - 18, y - 18, 36, 36, lit);
+    rect(x - 18, y - 18, 36, 36, null, palette.black, 2);
+    if (b.x < FIELD.x + 300 && b.y < FIELD.y + 320) {
+      px(x - 4, y - 12, 8, 22, palette.black);
+      px(x - 8, y - 8, 16, 4, hot ? palette.brass : palette.foam);
+      px(x - 10, y + 8, 20, 4, palette.black);
+      pxDiamond(x, y - 13, 5, hot ? palette.foam : palette.brass);
+      return;
+    }
+    if (b.x > FIELD.x + 470 && b.y < FIELD.y + 320) {
+      px(x - 10, y - 8, 20, 14, palette.black);
+      px(x - 7, y - 5, 14, 8, hot ? palette.foam : "#d8d3be");
+      px(x - 3, y - 14, 6, 8, palette.brass);
+      px(x - 13, y + 6, 26, 4, palette.black);
+      return;
+    }
+    if (Math.abs(b.x - (FIELD.x + 390)) < 4 && Math.abs(b.y - (FIELD.y + 336)) < 4) {
+      pxDiamond(x, y, 14, palette.black);
+      pxDiamond(x, y, 9, hot ? palette.foam : palette.blue);
+      pxDiamond(x, y, 4, palette.deep);
+      return;
+    }
+    px(x - 10, y - 7, 20, 14, palette.black);
+    px(x - 7, y - 4, 14, 8, hot ? palette.foam : palette.blue);
+    px(x - 2, y - 12, 4, 24, palette.black);
+  }
+
+
+  function pocketThematicBeacon(p) {
+    const tideMix = tideLevel();
+    const storm = stormLevel();
+    if (p.kind === "supply") return { active: state.heat > 45 || p.pulse > 0, color: palette.foam, label: "补给浮标" };
+    if (p.kind === "port") return { active: tideMix > 0.35 || p.pulse > 0, color: palette.blue, label: "港口潮门" };
+    if (p.kind === "anchor") return { active: tideMix > 0.25 || state.tideTimer > 0 || p.pulse > 0, color: palette.brass, label: "锚湾灯标" };
+    if (p.kind === "treasure") return { active: state.combo > 8 || p.pulse > 0, color: palette.brass, label: "沉藏宝箱" };
+    if (p.kind === "storm") return { active: storm > 0.35 || p.pulse > 0, color: palette.coral, label: "风暴眼" };
+    if (p.kind === "return") return { active: ball.y > FIELD.b - 190 || p.pulse > 0, color: palette.foam, label: "回航信标" };
+    return { active: p.pulse > 0, color: palette.foam, label: p.label };
+  }
+
+  function drawPocket(p) {
+    const beacon = pocketThematicBeacon(p);
+    const tideMix = tideLevel();
+    const storm = stormLevel();
+    const active = beacon.active || (p.kind === "anchor" && state.tideTimer > 0);
+    const rr = p.r * (1 + p.pulse * 0.32) + (p.kind === "anchor" && state.tideTimer > 0 ? 10 : 0) + (active ? 2 : 0);
+    if (active) {
+      ctx.globalAlpha = 0.18 + Math.max(p.pulse, p.kind === "storm" ? storm * 0.18 : tideMix * 0.10);
+      drawPixelBurst(p.x, p.y, rr + 22, beacon.color);
+      ctx.globalAlpha = 1;
+    }
+    const sprite = p.kind === "storm" ? pixelSprites.pocketStorm : p.kind === "anchor" ? pixelSprites.pocketAnchor : pixelSprites.pocketSupply;
+    const accent = p.kind === "storm" ? palette.coral : p.kind === "anchor" || p.kind === "treasure" ? palette.brass : p.kind === "port" || p.kind === "return" ? palette.blue : palette.foam;
+    drawPixelSpriteCentered(sprite, p.x, p.y, p.kind === "anchor" ? 5.4 : 4.8, facilitySpriteMap(accent));
+    px(p.x - rr * 0.48, p.y - rr * 0.48, rr * 0.96, rr * 0.96, "#17252a");
+    rect(p.x - rr * 0.48, p.y - rr * 0.48, rr * 0.96, rr * 0.96, null, active ? beacon.color : palette.black, active ? 3 : 2);
+    if (active && p.kind !== "storm") {
+      ctx.globalAlpha = 0.28;
+      waveStroke(p.x - rr * 0.46, p.y + rr * 0.52, p.x + rr * 0.46, p.y + rr * 0.50, 4, beacon.color, 2);
+      ctx.globalAlpha = 1;
+    }
+    drawPocketIcon(p, rr);
+    text(p.label, p.x, p.y + rr + 8, p.kind === "anchor" ? 13 : 11, active ? beacon.color : palette.black, "center");
+  }
+
+  function drawPocketIcon(p, rr) {
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
+    if (p.kind === "supply") {
+      px(x - 10, y - 3, 20, 6, palette.foam);
+      px(x - 3, y - 10, 6, 20, palette.foam);
+      px(x - 12, y - 12, 24, 4, palette.brass);
+      return;
+    }
+    if (p.kind === "port") {
+      px(x - 13, y + 4, 26, 5, palette.foam);
+      px(x - 10, y - 2, 20, 6, palette.black);
+      px(x - 6, y - 10, 4, 12, palette.brass);
+      px(x + 2, y - 10, 4, 12, palette.brass);
+      return;
+    }
+    if (p.kind === "anchor") {
+      px(x - 2, y - 14, 4, 22, palette.black);
+      px(x - 12, y + 1, 24, 4, palette.black);
+      px(x - 11, y + 5, 4, 5, palette.black);
+      px(x + 7, y + 5, 4, 5, palette.black);
+      pxDiamond(x, y - 14, 5, palette.brass);
+      return;
+    }
+    if (p.kind === "treasure") {
+      px(x - 12, y - 7, 24, 15, palette.brass);
+      px(x - 12, y - 10, 24, 5, palette.black);
+      px(x - 2, y - 3, 4, 6, palette.foam);
+      return;
+    }
+    if (p.kind === "storm") {
+      pxDiamond(x, y - 2, 13, palette.coral);
+      px(x - 2, y - 10, 4, 13, palette.black);
+      px(x - 2, y + 6, 4, 4, palette.black);
+      return;
+    }
+    pxDiamond(x, y, Math.max(5, rr * 0.32), palette.blue);
+  }
+
+  function drawPixelBurst(x, y, r, color) {
+    const step = 4;
+    for (let i = 0; i < 16; i++) {
+      const a = i * TAU / 16 + state.phase * 0.6;
+      const len = r * (0.36 + (i % 4) * 0.1);
+      const bx = x + Math.cos(a) * len;
+      const by = y + Math.sin(a) * len;
+      const size = i % 3 === 0 ? step + 1 : step - 1;
+      px(bx - size / 2, by - size / 2, size, size, i % 5 === 0 ? palette.foam : color);
+    }
+    px(x - 2, y - 2, 4, 4, palette.foam);
+  }
+
+  function drawPixelRing(x, y, r, color, blocks = 24, size = 3, phase = 0) {
+    for (let i = 0; i < blocks; i++) {
+      const a = i * TAU / blocks + phase;
+      const px2 = x + Math.cos(a) * r;
+      const py2 = y + Math.sin(a) * r;
+      const long = i % 4 === 0 ? size + 2 : size;
+      px(px2 - long / 2, py2 - size / 2, long, size, color);
+    }
+  }
+
+  function drawPixelLockBox(x, y, r, color, pulse = 0, virtual = false) {
+    const rr = Math.round(r + 18 + pulse * 4);
+    const len = virtual ? 9 : 14;
+    const s = virtual ? 3 : 4;
+    const left = Math.round(x - rr);
+    const right = Math.round(x + rr);
+    const top = Math.round(y - rr);
+    const bottom = Math.round(y + rr);
+    px(left, top, len, s, color);
+    px(left, top, s, len, color);
+    px(right - len, top, len, s, color);
+    px(right - s, top, s, len, color);
+    px(left, bottom - s, len, s, color);
+    px(left, bottom - len, s, len, color);
+    px(right - len, bottom - s, len, s, color);
+    px(right - s, bottom - len, s, len, color);
+    px(x - s / 2, top - 7, s, 7, color);
+    px(x - s / 2, bottom, s, 7, color);
+    px(left - 7, y - s / 2, 7, s, color);
+    px(right, y - s / 2, 7, s, color);
+  }
+
+  function drawPixelClampBars(x, y, r, color, kind, t) {
+    const rr = Math.round(r + 10 + Math.sin(state.phase * 18) * 2 * t);
+    const s = kind === "HEAVY" ? 5 : 3;
+    if (kind === "HEAVY") {
+      px(x - rr - 7, y - 10, s, 20, palette.black);
+      px(x + rr + 2, y - 10, s, 20, palette.black);
+      px(x - rr - 4, y - 7, s, 14, color);
+      px(x + rr - 1, y - 7, s, 14, color);
+      px(x - rr - 10, y - 3, 8, s, color);
+      px(x + rr + 2, y - 3, 8, s, color);
+      return;
+    }
+    if (kind === "SHORT") {
+      px(x - rr, y - 2, rr * 2, 3, palette.black);
+      px(x - rr + 3, y - 1, rr * 2 - 6, 1, color);
+      px(x - rr + 2, y - 8, 5, 5, color);
+      px(x + rr - 7, y + 3, 5, 5, color);
+      return;
+    }
+    pxDiamond(x, y, rr, color);
+    pxDiamond(x, y, Math.max(2, rr - 5), "#17252a");
+    px(x - 2, y - rr - 6, 4, 7, color);
+    px(x - 2, y + rr - 1, 4, 7, color);
+  }
+
+  function drawAnchorClamp(x, y, r, fx) {
+    const t = clamp(fx.life / fx.lock, 0, 1);
+    ctx.globalAlpha = 0.82 * t;
+    drawPixelClampBars(x, y, r, fx.color, fx.kind, t);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawGlass() {
+    ctx.globalAlpha = 0.13;
+    for (let x = FIELD.x - 240 + state.glass; x < FIELD.r + 200; x += 320) {
+      line(x, FIELD.y, x + 150, FIELD.b, palette.foam, 8);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function anchorCandidatePreview(type, range) {
+    const aim = aimVector();
+    const intent = aimIntentPoint(type, aim, range);
+    const list = [];
+    for (const t of anchorCandidateList(type)) {
+      const d = dist(ball.x, ball.y, t.x, t.y);
+      if (d > range + 18) continue;
+      const vx = (t.x - ball.x) / Math.max(1, d);
+      const vy = (t.y - ball.y) / Math.max(1, d);
+      const angle = angleBetween(aim.x, aim.y, vx, vy);
+      const pointerD = dist(intent.x, intent.y, t.x, t.y);
+      const snap = (type.snap || 54) + Math.min(14, t.r * 0.5);
+      const looseValid = type.key === "SHORT" ? pointerD <= snap * 1.18 : angle <= type.cone * 1.12;
+      if (!looseValid) continue;
+      const target = enrichAnchorTarget({ ...t, d, angle, pointerD, virtual: false }, type, aim, intent, range);
+      list.push(target);
+    }
+    return list.sort((a, b) => (b.quality || 0) - (a.quality || 0)).slice(0, 10);
+  }
+
+  function drawAnchorCandidateHints(type, range, target, pulse) {
+    const list = anchorCandidatePreview(type, range);
+    for (const t of list) {
+      const isBest = target && Math.abs(t.x - target.x) < 0.5 && Math.abs(t.y - target.y) < 0.5 && t.type === target.type;
+      const q = t.quality || 0;
+      ctx.globalAlpha = isBest ? 0.86 : 0.16 + q * 0.28;
+      const color = isBest ? type.color : q >= 0.72 ? palette.foam : palette.gray;
+      drawPixelLockBox(t.x, t.y, t.r + (isBest ? 8 : 4), color, pulse * (isBest ? 1 : 0.45), false);
+      if (q >= 0.82 || isBest) {
+        ctx.globalAlpha = isBest ? 0.45 : 0.22;
+        drawPixelRing(t.x, t.y, t.r + 18 + pulse * 4, color, 16, 2, state.phase * 0.32);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawAnchorHudBubble(target, type, pulse) {
+    const x = clamp(ball.x + 26, FIELD.x + 18, FIELD.r - 250);
+    const y = clamp(ball.y - 72, FIELD.y + 20, FIELD.b - 92);
+    const w = 226;
+    const h = 48;
+    const q = target ? target.quality || 0 : 0;
+    const fill = q >= 0.82 ? "#f4f0df" : "#17252a";
+    const fg = q >= 0.82 ? palette.black : palette.foam;
+    ctx.globalAlpha = 0.9;
+    rect(x, y, w, h, fill, type.color, 2);
+    ctx.globalAlpha = 1;
+    const label = target ? `${target.qualityLabel} · ${anchorTargetName(target)} · ${Math.round(q * 100)}%` : "没有有效锚点";
+    text(label, x + 10, y + 7, 12, fg, "left");
+    const hint = type.key === "SHORT" ? "短链：贴近亮点，拉紧后松开" : type.key === "HEAVY" ? `重锚：爆破 ${target?.blastStats?.breakable || 0} 钉` : "回航：优先把球拉回上方";
+    text(hint, x + 10, y + 27, 11, q >= 0.82 ? palette.deep : "#cfd7d1", "left");
+    if (q >= 0.82) {
+      ctx.globalAlpha = 0.35 + pulse * 0.25;
+      px(x + w - 50, y + 8, 34, 4, type.color);
+      px(x + w - 50, y + 18, 34, 4, type.color);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawAnchorAim() {
+    if (!state.anchorAim || ball.dead || ball.inLane || ball.anchor) return;
+    const type = tunedAnchorType();
+    const aim = aimVector();
+    const range = anchorRangeFor(type);
+    const intent = aimIntentPoint(type, aim, range);
+    const target = state.anchorAimTarget || nearestAnchorTarget();
+    const hasShortTarget = type.key === "SHORT" && target;
+    const endX = hasShortTarget ? target.x : intent.x;
+    const endY = hasShortTarget ? target.y : intent.y;
+    const angle = Math.atan2(aim.y, aim.x);
+    const pulse = 0.5 + Math.sin(state.phase * 12) * 0.5;
+
+    ctx.globalAlpha = 0.10;
+    circle(ball.x, ball.y, Math.min(range, 150), type.color, null, 0);
+    ctx.globalAlpha = 0.18;
+    arc(ball.x, ball.y, Math.min(range, 150), angle - type.cone * Math.PI / 180, angle + type.cone * Math.PI / 180, type.color, 5);
+    ctx.globalAlpha = 1;
+
+    drawAnchorCandidateHints(type, range, target, pulse);
+
+    if (type.key === "SHORT") {
+      drawShortChainAim(endX, endY, angle, type, pulse, !!target);
+      const intentGap = dist(intent.x, intent.y, endX, endY);
+      if (target && intentGap > 8) {
+        ctx.globalAlpha = 0.26;
+        circle(intent.x, intent.y, 8, null, palette.foam, 2);
+        line(intent.x - 10, intent.y, intent.x + 10, intent.y, palette.foam, 1);
+        line(intent.x, intent.y - 10, intent.x, intent.y + 10, palette.foam, 1);
+        ctx.globalAlpha = 1;
+      }
+    } else {
+      line(ball.x, ball.y, endX, endY, palette.black, 9);
+      line(ball.x, ball.y, endX, endY, type.color, target ? 4 : 3);
+      const links = Math.max(5, Math.floor(dist(ball.x, ball.y, endX, endY) / 20));
+      for (let i = 1; i < links; i++) {
+        const t = i / links;
+        const lx = lerp(ball.x, endX, t);
+        const ly = lerp(ball.y, endY, t);
+        const rr = i % 2 ? 4 : 2.5;
+        ctx.globalAlpha = 0.48 + pulse * 0.28;
+        circle(lx, ly, rr, i % 2 ? palette.foam : type.color, palette.black, 1);
+      }
+      ctx.globalAlpha = 1;
+      drawAimArrow(endX, endY, angle, type.color);
+    }
+
+    if (target) {
+      if (type.key === "HEAVY") drawHeavyAimPreview(target, type, pulse);
+      drawTargetLock(target, type, pulse);
+      text(target.virtual ? "回航点" : `${target.qualityLabel} ${anchorTargetName(target)}`, target.x, target.y - target.r - 34, 12, type.color, "center");
+    } else {
+      ctx.globalAlpha = 0.55;
+      circle(endX, endY, 12, null, palette.gray, 3);
+      ctx.globalAlpha = 1;
+    }
+
+    drawAnchorHudBubble(target, type, pulse);
+    ctx.globalAlpha = 0.32;
+    arc(ball.x, ball.y, Math.min(range, 100), angle - type.cone * Math.PI / 180, angle + type.cone * Math.PI / 180, type.color, 3);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHeavyAimPreview(target, type, pulse) {
+    const radius = type.blastRadius || 72;
+    ctx.globalAlpha = 0.14;
+    drawPixelRing(target.x, target.y, radius, type.color, 32, 4, state.phase * 0.35);
+    ctx.globalAlpha = 0.62;
+    drawPixelRing(target.x, target.y, radius + pulse * 5, type.color, 32, 3, -state.phase * 0.45);
+    for (const p of pins) {
+      if (p.broken || (p.kind !== "pin" && p.kind !== "brass")) continue;
+      const d = dist(target.x, target.y, p.x, p.y);
+      if (d > radius) continue;
+      const willBreak = (p.hp ?? pinHp(p.kind)) <= (type.pinDamage || 1);
+      ctx.globalAlpha = willBreak ? 0.9 : 0.58;
+      drawPixelLockBox(p.x, p.y, p.r + (willBreak ? 7 : 4), willBreak ? palette.red : palette.brass, pulse * 0.5);
+      if (willBreak) {
+        px(p.x - p.r - 6, p.y - p.r - 6, 4, 4, palette.red);
+        px(p.x + p.r + 2, p.y - p.r - 6, 4, 4, palette.red);
+        px(p.x - 2, p.y + p.r + 3, 4, 4, palette.red);
+      } else {
+        px(p.x - p.r - 2, p.y - 1, p.r * 2 + 4, 2, palette.brass);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawShortChainAim(endX, endY, angle, type, pulse, valid = true) {
+    const d = Math.max(1, dist(ball.x, ball.y, endX, endY));
+    const nx = (endX - ball.x) / d;
+    const ny = (endY - ball.y) / d;
+    const side = (state.aimX >= ball.x ? 1 : -1);
+    const bend = clamp(d * 0.24, 18, 42) * side;
+    const cx = (ball.x + endX) / 2 - ny * bend;
+    const cy = (ball.y + endY) / 2 + nx * bend + Math.sin(state.phase * 10) * 4;
+
+    const chainColor = valid ? type.color : palette.gray;
+    const hookColor = valid ? palette.foam : palette.gray;
+
+    ctx.strokeStyle = palette.black;
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(ball.x) + 0.5, Math.round(ball.y) + 0.5);
+    ctx.quadraticCurveTo(Math.round(cx) + 0.5, Math.round(cy) + 0.5, Math.round(endX) + 0.5, Math.round(endY) + 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = chainColor;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = valid ? 1 : 0.54;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(ball.x) + 0.5, Math.round(ball.y) + 0.5);
+    ctx.quadraticCurveTo(Math.round(cx) + 0.5, Math.round(cy) + 0.5, Math.round(endX) + 0.5, Math.round(endY) + 0.5);
+    ctx.stroke();
+
+    const links = Math.max(5, Math.floor(d / 18));
+    for (let i = 1; i < links; i++) {
+      const t = i / links;
+      const qx = lerp(lerp(ball.x, cx, t), lerp(cx, endX, t), t);
+      const qy = lerp(lerp(ball.y, cy, t), lerp(cy, endY, t), t);
+      ctx.globalAlpha = (valid ? 0.5 : 0.24) + pulse * (valid ? 0.32 : 0.12);
+      circle(qx, qy, i % 2 ? 3.4 : 2.2, i % 2 ? hookColor : chainColor, palette.black, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    drawShortHookHead(endX, endY, nx, ny, chainColor, hookColor, pulse, valid);
+  }
+
+  function drawShortHookHead(x, y, nx, ny, chainColor, hookColor, pulse, valid) {
+    const angle = Math.atan2(ny, nx);
+    ctx.globalAlpha = valid ? 1 : 0.55;
+    drawPixelSpriteRotated(pixelSprites.hookShort, x + Math.cos(angle) * 6, y + Math.sin(angle) * 6, 2.2, angle, facilitySpriteMap(chainColor, hookColor));
+    ctx.globalAlpha = valid ? 0.82 : 0.42;
+    px(x + Math.cos(angle) * 18 - 2, y + Math.sin(angle) * 18 - 2, 4 + pulse * 1.5, 4 + pulse * 1.5, hookColor);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawModeSwitchFlash() {
+    if (state.modeFlash <= 0) return;
+    const type = anchorType();
+    const t = clamp(state.modeFlash / 0.18, 0, 1);
+    const x = ball.dead || ball.inLane ? FIELD.x + FIELD.w / 2 : ball.x;
+    const y = ball.dead || ball.inLane ? FIELD.y + 96 : ball.y;
+    ctx.globalAlpha = 0.72 * t;
+    arc(x, y, 28 + (1 - t) * 34, 0, TAU, type.color, 4);
+    ctx.globalAlpha = 0.42 * t;
+    for (let i = 0; i < 6; i++) {
+      const a = state.phase * 4 + i * TAU / 6;
+      const r1 = 18 + (1 - t) * 12;
+      const r2 = 38 + (1 - t) * 28;
+      line(x + Math.cos(a) * r1, y + Math.sin(a) * r1, x + Math.cos(a) * r2, y + Math.sin(a) * r2, type.color, 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawAimArrow(x, y, angle, color) {
+    const back = 18;
+    const wing = 13;
+    const ax = Math.cos(angle);
+    const ay = Math.sin(angle);
+    const px2 = -ay;
+    const py2 = ax;
+    const baseX = x - ax * back;
+    const baseY = y - ay * back;
+    line(baseX + px2 * wing, baseY + py2 * wing, x, y, palette.black, 7);
+    line(baseX - px2 * wing, baseY - py2 * wing, x, y, palette.black, 7);
+    line(baseX + px2 * wing, baseY + py2 * wing, x, y, color, 3);
+    line(baseX - px2 * wing, baseY - py2 * wing, x, y, color, 3);
+  }
+
+  function drawTargetLock(target, type, pulse) {
+    const rr = target.r + 20 + pulse * 5;
+    ctx.globalAlpha = target.virtual ? 0.58 : 0.82;
+    drawPixelLockBox(target.x, target.y, target.r + 4, type.color, pulse, target.virtual);
+    drawPixelRing(target.x, target.y, rr, type.color, target.virtual ? 14 : 20, target.virtual ? 2 : 3, state.phase * 0.4);
+    px(target.x - 2, target.y - 2, 4, 4, palette.black);
+    px(target.x - 1, target.y - 1, 2, 2, type.color);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawAimVignette() {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(FIELD.x, FIELD.y, FIELD.w, FIELD.h);
+    ctx.clip();
+
+    const type = anchorType();
+    const pulse = 0.5 + Math.sin(state.phase * 8) * 0.5;
+    const focusR = 122 + pulse * 8;
+    const focusX = clamp(ball.x, FIELD.x + focusR, FIELD.r - focusR);
+    const focusY = clamp(ball.y, FIELD.y + focusR, FIELD.b - focusR);
+
+    const shade = ctx.createRadialGradient(focusX, focusY, focusR * 0.45, focusX, focusY, FIELD.w * 0.76);
+    shade.addColorStop(0, "rgba(2, 5, 5, 0.02)");
+    shade.addColorStop(0.42, "rgba(2, 5, 5, 0.16)");
+    shade.addColorStop(1, "rgba(2, 5, 5, 0.52)");
+    ctx.fillStyle = shade;
+    ctx.fillRect(FIELD.x, FIELD.y, FIELD.w, FIELD.h);
+
+    if (state.anchorAimTarget) {
+      const t = state.anchorAimTarget;
+      const tr = t.r + 46 + pulse * 8;
+      ctx.globalAlpha = 0.86;
+      drawPixelRing(t.x, t.y, tr, type.color, 28, 2, state.phase * 0.45);
+      ctx.globalAlpha = 0.18;
+      drawPixelRing(t.x, t.y, tr + 14, type.color, 28, 5, -state.phase * 0.25);
+    }
+
+    ctx.globalAlpha = 0.72;
+    drawPixelRing(focusX, focusY, focusR + 8, type.color, 36, 2, -state.phase * 0.2);
+    ctx.globalAlpha = 0.38;
+    for (let i = 0; i < 7; i++) {
+      const y = FIELD.y + 28 + i * 78 + Math.sin(state.phase * 3 + i) * 3;
+      line(FIELD.x + 22, y, FIELD.r - 22, y + 8, type.color, 1);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawAnchorLine() {
+    if (!ball.anchor) return;
+    const a = ball.anchor;
+    const type = ANCHOR_TYPES[a.anchorType] || ANCHOR_TYPES.SHORT;
+    const lifeRatio = clamp(a.life / a.max, 0, 1);
+    const ropeColor = type.key === "SHORT" ? palette.blue : type.key === "HEAVY" ? palette.brass : palette.foam;
+    const ropeWidth = (type.key === "HEAVY" ? 5 : type.key === "SHORT" ? 3 : 3) + (a.perfect ? 1 : 0);
+    const d = dist(a.x, a.y, ball.x, ball.y);
+    const bend = type.key === "SHORT" ? (1 - clamp(a.taut || 0, 0, 1)) * 22 * Math.sin(state.phase * 8) : 0;
+    const mx = (a.x + ball.x) / 2 + (ball.y - a.y) / Math.max(1, d) * bend;
+    const my = (a.y + ball.y) / 2 - (ball.x - a.x) / Math.max(1, d) * bend + (type.key === "SHORT" ? (1 - clamp(a.taut || 0, 0, 1)) * 9 : 0);
+    ctx.globalAlpha = 0.34 + lifeRatio * 0.42 + (a.taut || 0) * 0.16 + (a.perfect ? 0.12 : 0);
+    ctx.strokeStyle = palette.black;
+    ctx.lineWidth = ropeWidth + 5;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5);
+    ctx.quadraticCurveTo(Math.round(mx) + 0.5, Math.round(my) + 0.5, Math.round(ball.x) + 0.5, Math.round(ball.y) + 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = ropeColor;
+    ctx.lineWidth = ropeWidth;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5);
+    ctx.quadraticCurveTo(Math.round(mx) + 0.5, Math.round(my) + 0.5, Math.round(ball.x) + 0.5, Math.round(ball.y) + 0.5);
+    ctx.stroke();
+    const links = Math.max(4, Math.floor(d / (type.key === "HEAVY" ? 15 : 19)));
+    for (let i = 1; i < links; i++) {
+      const t = i / links;
+      const qx = lerp(lerp(a.x, mx, t), lerp(mx, ball.x, t), t);
+      const qy = lerp(lerp(a.y, my, t), lerp(my, ball.y, t), t);
+      circle(qx, qy, type.key === "HEAVY" ? 4 : 3, i % 2 || a.perfect ? palette.foam : ropeColor, palette.black, 1);
+    }
+    if (a.perfect) {
+      ctx.globalAlpha = 0.18 + (a.taut || 0) * 0.16;
+      drawPixelRing(a.x, a.y, 24 + (a.taut || 0) * 10, ropeColor, 18, 2, state.phase * 0.42);
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBall() {
+    if (ball.dead) {
+      drawTinyMaiden(LANE_X, FIELD.b - 34, 0.8, true);
+      return;
+    }
+    const speed = Math.hypot(ball.vx, ball.vy);
+    const tideMix = tideLevel();
+    const storm = stormLevel();
+    for (let i = 0; i < ball.trail.length; i++) {
+      const t = ball.trail[i];
+      const fade = Math.max(0, t.life / 0.28);
+      ctx.globalAlpha = fade * clamp(speed / 900, 0.1, 0.45);
+      circle(t.x, t.y, ball.r + i * 0.15, ball.sweet || tideMix > 0.55 ? palette.blue : palette.foam, null, 0);
+      if (tideMix > 0.28 && i % 2 === 0) {
+        ctx.globalAlpha = fade * tideMix * 0.45;
+        px(t.x + Math.sin(state.phase + i) * 8, t.y + 3, 4, 2, palette.foam);
+      }
+      if (storm > 0.7 && i % 3 === 0) {
+        ctx.globalAlpha = fade * storm * 0.32;
+        px(t.x - 5, t.y - 7, 3, 8, palette.coral);
+      }
+    }
+    ctx.globalAlpha = 1;
+    drawTinyMaiden(ball.x, ball.y, ball.sweet ? 1.08 : 1, false);
+    if (tideMix > 0.45) {
+      ctx.globalAlpha = 0.16 + tideMix * 0.16;
+      drawPixelRing(ball.x, ball.y, ball.r + 18 + Math.sin(state.phase * 4) * 3, palette.foam, 14, 2, state.phase * 0.5);
+      ctx.globalAlpha = 1;
+    }
+    if (ball.anchor) {
+      const a = ball.anchor;
+      const ratio = clamp(a.life / a.max, 0, 1);
+      arc(ball.x, ball.y, ball.r + 13, -Math.PI / 2, -Math.PI / 2 + TAU * ratio, palette.brass, 3);
+    }
+  }
+
+  function drawTinyMaiden(x, y, scale = 1, ghost = false) {
+    const type = anchorType();
+    drawPixelSprite(pixelSprites.maidenMini, Math.round(x - 12 * scale * 0.5), Math.round(y - 9 * scale * 0.5), scale, spriteMap(type.color, ghost));
+  }
+
+  function drawEffects() {
+    for (const fx of anchorFx) drawAnchorFx(fx);
+    for (const r of rings) {
+      const t = 1 - r.life / r.max;
+      ctx.globalAlpha = clamp(r.life / r.max, 0, 1);
+      arc(r.x, r.y, r.r + t * 24, 0, TAU, r.color, 3);
+      ctx.globalAlpha = 1;
+    }
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      px(p.x, p.y, p.size, p.size, p.color);
+      ctx.globalAlpha = 1;
+    }
+    for (const f of floats) {
+      ctx.globalAlpha = clamp(f.life / f.max, 0, 1);
+      outlineText(f.s, f.x, f.y, f.size, f.color, "center");
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawAnchorFx(fx) {
+    const age = fx.max - fx.life;
+    const travelT = clamp(age / fx.travel, 0, 1);
+    const ease = 1 - Math.pow(1 - travelT, 3);
+    const x = lerp(fx.fromX, fx.x, ease);
+    const y = lerp(fx.fromY, fx.y, ease);
+    const angle = Math.atan2(fx.y - fx.fromY, fx.x - fx.fromX);
+    const lockT = age <= fx.travel ? 0 : clamp((age - fx.travel) / fx.lock, 0, 1);
+    ctx.globalAlpha = age <= fx.travel ? 0.92 : 0.88 * (1 - lockT);
+
+    line(fx.fromX, fx.fromY, x, y, palette.black, fx.kind === "HEAVY" ? 6 : 4);
+    line(fx.fromX, fx.fromY, x, y, fx.color, fx.kind === "HEAVY" ? 3 : 2);
+
+    const links = Math.max(3, Math.floor(dist(fx.fromX, fx.fromY, x, y) / 22));
+    for (let i = 1; i < links; i++) {
+      const t = i / links;
+      const lx = lerp(fx.fromX, x, t);
+      const ly = lerp(fx.fromY, y, t);
+      circle(lx, ly, fx.kind === "HEAVY" ? 3.2 : 2.4, i % 2 ? palette.foam : fx.color, palette.black, 1);
+    }
+
+    drawFlyingAnchorHead(x, y, angle, fx);
+
+    if (lockT > 0) {
+      ctx.globalAlpha = 0.54 * (1 - lockT);
+      arc(fx.x, fx.y, fx.r + 14 + lockT * 18, 0, TAU, fx.color, 3);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawFlyingAnchorHead(x, y, angle, fx) {
+    const heavy = fx.kind === "HEAVY";
+    const sprite = fx.kind === "RETURN" ? pixelSprites.hookReturn : heavy ? pixelSprites.hookHeavy : pixelSprites.hookShort;
+    drawPixelSpriteRotated(sprite, x, y, heavy ? 2.5 : 2.1, angle, facilitySpriteMap(fx.color, palette.foam));
+  }
+
+  function drawPanel() {
+    drawPanelV2();
+    return;
+    rect(PANEL.x, PANEL.y, PANEL.w, PANEL.h, "#ede8d1", palette.black, 3);
+    drawCharacterPortrait(PANEL.x + 16, PANEL.y + 16, PANEL.w - 32, 152);
+    drawScoreBox(PANEL.x + 16, PANEL.y + 182, PANEL.w - 32, 108);
+
+    const type = anchorType();
+    drawResourceBar(PANEL.x + 16, PANEL.y + 304, PANEL.w - 32, 52, "锚能量", state.anchorEnergy / 100, type.color, anchorStatusLabel(type));
+    drawMiniBar(PANEL.x + 16, PANEL.y + 370, PANEL.w - 32, "HEAT", state.heat / 100, palette.coral, state.heat > 0.78);
+    drawMiniBar(PANEL.x + 16, PANEL.y + 392, PANEL.w - 32, "TIDE", state.tideTimer > 0 ? 1 : state.tide / 100, palette.blue, state.tideTimer > 0);
+    drawBalls(PANEL.x + 16, PANEL.y + 426, PANEL.w - 32, 86);
+    drawSkillBox(PANEL.x + 16, PANEL.y + 526, PANEL.w - 32, 68);
+  }
+
+  function drawCharacterPortrait(x, y, w, h) {
+    rect(x, y, w, h, "#d6e0d6", palette.black, 2);
+    const type = anchorType();
+    for (let yy = y + 12; yy < y + h - 8; yy += 18) {
+      waveStroke(x + 10, yy, x + w - 10, yy + Math.sin(yy * 0.08 + state.phase) * 4, 4, "#bfd1cf", 1);
+    }
+
+    const spriteScale = 4;
+    const spriteX = x + 12;
+    const spriteY = y + 24;
+    rect(spriteX - 6, spriteY - 6, 20 * spriteScale + 12, 18 * spriteScale + 12, "#22343a", palette.black, 2);
+    drawPixelSprite(pixelSprites.maidenBust, spriteX, spriteY, spriteScale, spriteMap(type.color));
+    px(spriteX + 8 * spriteScale, spriteY + 3 * spriteScale, 4, 4, palette.brass);
+    px(spriteX + 9 * spriteScale, spriteY + 4 * spriteScale, 4, 4, palette.brass);
+
+    text(maiden.name, x + 122, y + 18, 22, palette.black, "left");
+    text(maiden.title, x + 124, y + 46, 12, "#4c5954", "left");
+    rect(x + 122, y + 66, w - 136, 26, "#f4f0df", palette.black, 2);
+    text(`当前模式：${type.label}`, x + 134, y + 72, 13, type.color, "left");
+    rect(x + 122, y + 98, w - 136, 22, "#17252a", palette.black, 2);
+    text(`状态：${state.messageTimer > 0 ? state.message : state.tideTimer > 0 ? "TIDE RUSH" : "READY"}`, x + 132, y + 102, 11, palette.foam, "left");
+    wrapped(maiden.quote, x + 122, y + 128, w - 138, 12, "#34413e", "left");
+  }
+
+  function drawScoreBox(x, y, w, h) {
+    rect(x, y, w, h, palette.black, null, 0);
+    rect(x + 6, y + 6, w - 12, h - 12, "#17252a", palette.foam, 2);
+    text("SCORE", x + 18, y + 12, 12, "#aeb7b0", "left");
+    text(Math.round(state.displayScore).toString().padStart(8, "0"), x + w - 18, y + 10, 28, palette.foam, "right");
+    text(`委托 ${state.target}`, x + 18, y + 46, 11, "#cfd7d1", "left");
+    text(`最远航迹 ${state.high}`, x + w - 18, y + 46, 11, "#cfd7d1", "right");
+    const ratio = clamp(state.score / state.target, 0, 1);
+    px(x + 18, y + 66, w - 36, 10, "#334145");
+    px(x + 18, y + 66, Math.round((w - 36) * ratio), 10, state.won ? palette.brass : palette.foam);
+    text(`进度 ${Math.round(ratio * 100)}%`, x + 18, y + 82, 11, state.won ? palette.brass : "#aeb7b0", "left");
+    text(state.won ? "目标达成" : "继续航行", x + w - 18, y + 82, 11, state.won ? palette.brass : "#aeb7b0", "right");
+  }
+
+  function drawGauge(x, y, w, h, label, pct, alert, color) {
+    rect(x, y, w, h, "#17252a", palette.black, 2);
+    const innerH = h - 44;
+    const fillH = Math.round(innerH * clamp(pct, 0, 1));
+    for (let i = 0; i < fillH; i += 9) {
+      const yy = y + h - 22 - i;
+      const blink = alert && Math.floor(state.phase * 7 + i / 9) % 2 === 0;
+      px(x + 10, yy, w - 20, 6, blink ? palette.foam : color);
+    }
+    text(label, x + w / 2, y + h - 18, 10, palette.foam, "center");
+  }
+
+  function drawBalls(x, y, w, h) {
+    rect(x, y, w, h, "#17252a", palette.black, 2);
+    text("剩余球数", x + 12, y + 10, 12, palette.foam, "left");
+    text(`顺风 ${Math.floor(state.combo)}`, x + w - 12, y + 10, 11, palette.foam, "right");
+    const max = 10;
+    for (let i = 0; i < max; i++) {
+      const cx = x + 20 + (i % 5) * 22;
+      const cy = y + 36 + Math.floor(i / 5) * 24;
+      circle(cx, cy, 7, i < Math.min(max, state.ballsLeft) ? palette.foam : "#39484c", palette.black, 1);
+    }
+    if (state.ballsLeft > max) text(`+${state.ballsLeft - max}`, x + w - 18, y + 49, 16, palette.foam, "right");
+    text(`当前状态：${readableBallStatus()}`, x + 12, y + h - 18, 11, "#cfd7d1", "left");
+  }
+
+  function drawSkillBox(x, y, w, h) {
+    rect(x, y, w, h, "#17252a", palette.black, 2);
+    const type = anchorType();
+    drawModeChip(x + 10, y + 8, "SHORT", state.anchorMode === "SHORT");
+    drawModeChip(x + 99, y + 8, "HEAVY", state.anchorMode === "HEAVY");
+    drawModeChip(x + 188, y + 8, "RETURN", state.anchorMode === "RETURN");
+    const hint = ball.anchor ? "X / SHIFT：释放锚链" : state.anchorAim ? "松开 X：执行抛锚" : "X / SHIFT：进入锚点瞄准";
+    text(hint, x + 12, y + 42, 11, palette.foam, "left");
+    text(`成本 ${type.cost}  ·  已破坏钉 ${state.brokenPins}`, x + w - 12, y + 42, 10, type.color, "right");
+  }
+
+  function drawOverlay() {
+    drawOverlayV2();
+    return;
+    if (!showIntro && !paused && !state.gameOver) {
+      drawBottomControls();
+      return;
+    }
+    drawBottomControls();
+    ctx.save();
+    ctx.globalAlpha = 0.86;
+    rect(FIELD.x + 92, FIELD.y + 122, FIELD.w - 184, 260, "#17252a", null, 0);
+    ctx.globalAlpha = 1;
+    rect(FIELD.x + 108, FIELD.y + 138, FIELD.w - 216, 228, null, palette.foam, 3);
+    if (paused) {
+      outlineText("PAUSED", FIELD.x + FIELD.w / 2, FIELD.y + 182, 42, palette.foam, "center");
+      text("按 P 继续", FIELD.x + FIELD.w / 2, FIELD.y + 262, 18, palette.foam, "center");
+    } else if (state.gameOver) {
+      outlineText(state.won ? "航线完成" : "航线失败", FIELD.x + FIELD.w / 2, FIELD.y + 172, 42, state.won ? palette.brass : palette.foam, "center");
+      text(`得分 ${state.score}`, FIELD.x + FIELD.w / 2, FIELD.y + 250, 20, palette.foam, "center");
+      text("按 R 重新开始", FIELD.x + FIELD.w / 2, FIELD.y + 300, 18, palette.foam, "center");
+    } else {
+      outlineText("锚链水手弹珠机", FIELD.x + FIELD.w / 2, FIELD.y + 166, 42, palette.foam, "center");
+      text("按住 SPACE / 鼠标蓄力，松开发射角色球", FIELD.x + FIELD.w / 2, FIELD.y + 238, 18, palette.foam, "center");
+      text("按住 X / SHIFT 进入子弹时间，用鼠标方向选锚点，松开抛锚", FIELD.x + FIELD.w / 2, FIELD.y + 278, 17, palette.brass, "center");
+      text("A/D 微调，1/2/3 切换锚型，目标是把角色送进锚泊港", FIELD.x + FIELD.w / 2, FIELD.y + 318, 15, "#cdd8d4", "center");
+    }
+    ctx.restore();
+  }
+
+  function drawBottomControls() {
+    drawBottomControlsV2();
+    return;
+    rect(FIELD.x, FIELD.b + 8, FIELD.w, 28, "#17252a", palette.black, 2);
+    const ready = ball.dead && !state.gameOver;
+    text("SPACE 长按蓄力", FIELD.x + 18, FIELD.b + 16, 12, palette.foam, "left");
+    text("A / D 微调航向", FIELD.x + 180, FIELD.b + 16, 12, palette.foam, "left");
+    const type = anchorType();
+    text(`X / SHIFT 锚点瞄准（${type.label}）`, FIELD.x + 350, FIELD.b + 16, 12, state.anchorEnergy >= type.cost ? type.color : palette.gray, "left");
+    text("1 / 2 / 3 切换锚型", FIELD.x + 600, FIELD.b + 16, 12, palette.foam, "left");
+    const bx = FIELD.r - 180;
+    const by = FIELD.b + 17;
+    px(bx, by, 150, 8, "#344145");
+    px(bx, by, Math.round(150 * state.power), 8, ready ? palette.foam : "#788284");
+    text("潮压", bx - 10, by - 5, 10, palette.foam, "right");
+  }
+
+  function beginCharge() {
+    ensureAudio();
+    if (!ball.dead || state.gameOver || paused || state.ballsLeft <= 0) return;
+    state.charging = true;
+    state.chargeDir = 1;
+    state.power = Math.max(0.08, state.power);
+  }
+
+  function releaseCharge() {
+    if (!state.charging) return;
+    state.charging = false;
+    launchBall(state.power);
+    state.power = 0;
+  }
+
+  function setAnchorMode(mode) {
+    if (!ANCHOR_TYPES[mode]) return;
+    if (state.anchorMode === mode) {
+      state.anchorAimTarget = state.anchorAim ? nearestAnchorTarget() : null;
+      return;
+    }
+    const prev = anchorType();
+    state.anchorMode = mode;
+    const type = anchorType();
+    state.lastAnchorMode = prev.key;
+    state.modeFlash = 0.18;
+    state.anchorAimTarget = state.anchorAim ? nearestAnchorTarget() : null;
+    const fx = ball.dead || ball.inLane ? FIELD.x + FIELD.w / 2 : ball.x;
+    const fy = ball.dead || ball.inLane ? FIELD.y + 96 : ball.y;
+    addRing(fx, fy, state.anchorAim ? 54 : 34, type.color, 0.18);
+    addFloat(type.key === "SHORT" ? "短链" : type.key === "HEAVY" ? "重锚" : "回航", fx, fy - 34, type.color, 15, -28);
+    setMessage(type.key === "SHORT" ? "短链：拉紧甩出" : type.key === "HEAVY" ? "重锚：爆破钉阵" : "回航锚：救球拉升", 0.7);
+    beep(type.key === "HEAVY" ? 180 : type.key === "RETURN" ? 620 : 420, 0.035, 0.018, "square");
+  }
+
+  function keydown(e) {
+    const c = e.code || e.key;
+    if (["Space", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "ShiftLeft", "ShiftRight", "KeyX", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7"].includes(c)) e.preventDefault();
+    if (keys.has(c)) return;
+    keys.add(c);
+    ensureAudio();
+    if (canNavigatorControl() && c === "Digit4") playNavigatorCard("guard");
+    if (canNavigatorControl() && c === "Digit5") playNavigatorCard("ramp");
+    if (canNavigatorControl() && c === "Digit6") playNavigatorCard("blast");
+    if (canNavigatorControl() && c === "Digit7") playNavigatorCard("block");
+
+    if (canHelmControl() && c === "Space") beginCharge();
+    if (canHelmControl() && (c === "KeyX" || c === "ShiftLeft" || c === "ShiftRight")) beginAnchorAim();
+    if (canHelmControl() && c === "Digit1") setAnchorMode("SHORT");
+    if (canHelmControl() && c === "Digit2") setAnchorMode("HEAVY");
+    if (canHelmControl() && c === "Digit3") setAnchorMode("RETURN");
+    if (canHelmControl() && (c === "KeyA" || c === "ArrowLeft")) nudge(-1);
+    if (canHelmControl() && (c === "KeyD" || c === "ArrowRight")) nudge(1);
+    if (c === "KeyP") paused = !paused;
+    if (c === "KeyM") soundEnabled = !soundEnabled;
+    if (c === "KeyR") {
+      if (MP.enabled) toggleReady();
+      else resetRun();
+    }
+  }
+
+  function keyup(e) {
+    const c = e.code || e.key;
+    keys.delete(c);
+    if (canHelmControl() && c === "Space") releaseCharge();
+    if (canHelmControl() && (c === "KeyX" || c === "ShiftLeft" || c === "ShiftRight")) castAnchor();
+  }
+
+  function pointerPoint(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) / r.width * W,
+      y: (e.clientY - r.top) / r.height * H
+    };
+  }
+
+  canvas.addEventListener("pointerdown", e => {
+    if (!canHelmControl()) return;
+    ensureAudio();
+    pointerDown = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    const p = pointerPoint(e);
+    state.aimX = p.x;
+    state.aimY = p.y;
+    if (p.x > PANEL.x && p.y > PANEL.y + 488) {
+      pointerMode = "anchor";
+      beginAnchorAim();
+      return;
+    }
+    if (!ball.dead && p.x < FIELD.x + FIELD.w / 2) {
+      pointerMode = "nudgeL";
+      nudge(-1);
+      return;
+    }
+    if (!ball.dead && p.x >= FIELD.x + FIELD.w / 2 && p.y < FIELD.b) {
+      pointerMode = "nudgeR";
+      nudge(1);
+      return;
+    }
+    pointerMode = "charge";
+    beginCharge();
+  });
+
+  canvas.addEventListener("pointerup", e => {
+    pointerDown = false;
+    const p = pointerPoint(e);
+    state.aimX = p.x;
+    state.aimY = p.y;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (pointerMode === "charge") releaseCharge();
+    if (pointerMode === "anchor") castAnchor();
+    pointerMode = "none";
+  });
+
+  canvas.addEventListener("pointercancel", () => {
+    pointerDown = false;
+    if (pointerMode === "charge") releaseCharge();
+    if (pointerMode === "anchor") cancelAnchorAim();
+    pointerMode = "none";
+  });
+
+  canvas.addEventListener("pointermove", e => {
+    const p = pointerPoint(e);
+    state.aimX = p.x;
+    state.aimY = p.y;
+  });
+
+  window.addEventListener("keydown", keydown);
+  window.addEventListener("keyup", keyup);
+
+  function frame(now) {
+    const raw = Math.min(0.04, (now - lastTime) / 1000);
+    lastTime = now;
+    const timeScale = state.anchorAim && !ball.anchor && !ball.dead && !ball.inLane ? 0.3 : 1;
+    acc += raw * timeScale;
+    const fixed = 1 / 120;
+    let steps = 0;
+    while (acc >= fixed && steps < 5) {
+      update(fixed);
+      acc -= fixed;
+      steps += 1;
+    }
+    if (steps >= 5) acc = 0;
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  window.__anchorProtoDebug = () => ({
+    score: state.score,
+    ballsLeft: state.ballsLeft,
+    anchorEnergy: state.anchorEnergy,
+    anchorMode: state.anchorMode,
+    lastAnchorMode: state.lastAnchorMode,
+    modeFlash: state.modeFlash,
+    anchorAim: state.anchorAim,
+    anchorAimQuality: state.anchorAimQuality,
+    seaOffsetX: state.seaOffsetX,
+    seaOffsetY: state.seaOffsetY,
+    seaRoll: state.seaRoll,
+    stormPulse: state.stormPulse,
+    lastAnchorQuality: state.lastAnchorQuality,
+    perfectAnchorStreak: state.perfectAnchorStreak,
+    brokenPins: state.brokenPins,
+    aim: {
+      x: state.aimX,
+      y: state.aimY,
+      intent: (() => {
+        const type = tunedAnchorType();
+        const aim = aimVector();
+        const range = state.tideTimer > 0 ? type.range + 42 * (1 + type.growthBonus * 0.55) : type.range;
+        return aimIntentPoint(type, aim, range);
+      })(),
+      target: state.anchorAimTarget ? { x: state.anchorAimTarget.x, y: state.anchorAimTarget.y, type: state.anchorAimTarget.type, quality: state.anchorAimTarget.quality, qualityLabel: state.anchorAimTarget.qualityLabel, virtual: !!state.anchorAimTarget.virtual } : null
+    },
+    ball: {
+      x: ball.x,
+      y: ball.y,
+      vx: ball.vx,
+      vy: ball.vy,
+      speed: Math.hypot(ball.vx, ball.vy),
+      dead: ball.dead,
+      inLane: ball.inLane,
+      anchored: !!ball.anchor,
+      anchor: ball.anchor ? { x: ball.anchor.x, y: ball.anchor.y, type: ball.anchor.anchorType, quality: ball.anchor.quality, perfect: !!ball.anchor.perfect, virtual: !!ball.anchor.virtual, targetType: ball.anchor.target?.type, life: ball.anchor.life, len: ball.anchor.len, taut: ball.anchor.taut || 0, tautPeak: ball.anchor.tautPeak || 0 } : null
+    },
+    growth: {
+      breakProgress: breakProgress(),
+      scoreMultiplier: scoreGrowthMultiplier(),
+      reachBonus: anchorReachBonus(),
+      totalBreakablePins: state.totalBreakablePins
+    },
+    sea: {
+      tideLevel: tideLevel(),
+      stormLevel: stormLevel(),
+      seaState: seaStateLabel(),
+      tideState: tideStateLabel(),
+      seaOffsetX: state.seaOffsetX,
+      seaOffsetY: state.seaOffsetY,
+      seaRoll: state.seaRoll,
+      seaCurrentX: state.seaCurrentX,
+      seaLift: state.seaLift
+    },
+    objects: { pins: pins.length, activePins: pins.filter(p => !p.broken).length, bumpers: bumpers.length, pockets: pockets.length, anchorFx: anchorFx.length, driftBoards: driftBoards.length, boardPreviews: boardPreviews.length },
+    navigator: { material: state.navigatorMaterial, cooldown: state.navigatorCooldown, freeAnchorCharges: state.freeAnchorCharges, freeAnchorTimer: state.freeAnchorTimer },
+    network: { enabled: MP.enabled, role: MP.role, room: MP.room, relayUrl: MP.relayUrl, status: MP.status, peers: MP.peers, roles: MP.roles, ready: MP.ready, readyLocal: MP.readyLocal, readyAll: MP.readyAll, lastSnapshotId: MP.lastSnapshotId, pendingCards: MP.pendingCards.map(c => ({ ...c })) }
+  });
+
+  window.__anchorProtoTest = {
+    reset: resetRun,
+    constants: {
+      boardLimit: BOARD_LIMIT,
+      boardExpireGrace: BOARD_EXPIRE_GRACE,
+      boardHitWindow: BOARD_HIT_WINDOW
+    },
+    boardCards: BOARD_CARDS,
+    state,
+    ball,
+    boards: driftBoards,
+    previews: boardPreviews,
+    makeBoard(kind, overrides = {}) {
+      const card = BOARD_CARDS[kind];
+      if (!card) throw new Error(`unknown board kind: ${kind}`);
+      const board = {
+        id: ++state.boardSeq,
+        kind: card.key,
+        label: card.label,
+        x: FIELD.x + FIELD.w * 0.5,
+        y: FIELD.y + FIELD.h * 0.5,
+        w: card.w,
+        h: card.h,
+        angle: 0,
+        hp: card.hp,
+        maxHp: card.hp,
+        crackAt: card.crack,
+        breakAt: card.breakAt,
+        breakScore: card.score,
+        color: card.color,
+        accent: card.accent,
+        expiresIn: card.life,
+        maxLife: card.life,
+        crackCount: 0,
+        crackTimer: 0,
+        hitCooldown: 0,
+        expireGrace: 0,
+        expiring: false,
+        pulse: 0,
+        broken: false,
+        owner: "test",
+        ...overrides
+      };
+      driftBoards.push(board);
+      if (driftBoards.length > BOARD_LIMIT) driftBoards.shift();
+      return board;
+    },
+    updateBoards: updateBoardSystem,
+    hitBoard: registerBoardHit,
+    breakBoard,
+    shortStrain(board, taut = 0.85) {
+      const a = { x: board.x - board.w, y: board.y, taut, tautPeak: taut, boardHitKeys: [] };
+      ball.dead = false;
+      ball.inLane = false;
+      ball.x = board.x + board.w;
+      ball.y = board.y;
+      strainBoardsByShortAnchor(a, taut);
+      return board;
+    },
+    returnStrain(board) {
+      const a = { x: board.x, y: board.y - 110, perfect: true, boardHitKeys: [] };
+      ball.dead = false;
+      ball.inLane = false;
+      ball.x = board.x;
+      ball.y = FIELD.b - 80;
+      strainGuardBoardsByReturnAnchor(a);
+      return board;
+    },
+    debug: window.__anchorProtoDebug
+  };
+
+  bindModeMenu();
+  initNetworkFromQuery();
+  resetRun();
+  if (MP.enabled) hideModeMenu();
+  else showModeMenu();
+  requestAnimationFrame(frame);
+})();
