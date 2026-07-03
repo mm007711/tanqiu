@@ -203,6 +203,23 @@ keyDown("Digit4");
 assert.strictEqual(game.mp.pendingCards.length, 1, "second navigator hotkey should request a card normally");
 keyUp("Digit4");
 
+resetIntroReady();
+assert.strictEqual(keyDown("Digit4"), true, "solo board hotkey should be blocked from the browser");
+assert.strictEqual(introVisible(), false, "first solo board hotkey should dismiss the intro overlay");
+assert.strictEqual(game.previews.length, 0, "intro dismissal should not create a solo board preview");
+keyUp("Digit4");
+const soloMaterialBefore = game.state.navigatorMaterial;
+keyDown("Digit4");
+assert.strictEqual(game.previews.length, 1, "solo board hotkey should create a board preview");
+assert(game.state.navigatorMaterial < soloMaterialBefore, "solo board placement should spend navigator material");
+assert(game.state.navigatorCooldown > 0, "solo board placement should start the shared board cooldown");
+keyUp("Digit4");
+
+resetIntroReady("helm", true);
+keyDown("Digit4");
+assert.strictEqual(game.previews.length, 0, "network helm should not place local boards with navigator hotkeys");
+keyUp("Digit4");
+
 resetClean();
 game.setRole("navigator", false);
 const offlineCard = game.playCard("guard");

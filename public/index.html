@@ -1139,7 +1139,7 @@
 
   function drawOverlayV2() {
     drawBottomControlsV2();
-    if (MP.enabled || isNetworkNavigator()) drawNavigatorHud();
+    drawNavigatorHud();
     if (!showIntro && !paused && !state.gameOver) return;
 
     ctx.save();
@@ -1163,7 +1163,7 @@
       outlineText("锚链水手·潮航弹珠机", FIELD.x + FIELD.w / 2, oy + 28, 36, palette.foam, "center");
       text("按住 SPACE 蓄力，松开发射角色球", FIELD.x + FIELD.w / 2, oy + 94, 17, palette.foam, "center");
       text("X / SHIFT 进入子弹时间，用鼠标选择锚点", FIELD.x + FIELD.w / 2, oy + 130, 15, palette.brass, "center");
-      text("1 / 2 / 3 切换锚型，顺着海况抓机会", FIELD.x + FIELD.w / 2, oy + 158, 13, "#cdd8d4", "center");
+      text("1 / 2 / 3 切换锚型，4 / 5 / 6 / 7 布置木板", FIELD.x + FIELD.w / 2, oy + 158, 13, "#cdd8d4", "center");
     }
     ctx.restore();
   }
@@ -1186,7 +1186,7 @@
         ["A / D", "调舵", palette.foam],
         ["X / SHIFT", `抛缆 ${modeLabel(type.key)}`, state.anchorEnergy >= type.cost ? type.color : palette.gray],
         ["1 / 2 / 3", "切缆", palette.foam],
-        [MP.enabled ? "联机" : "1P", MP.enabled ? MP.room : "单人", MP.enabled ? palette.brass : palette.blue]
+        [MP.enabled ? "联机" : "4 / 5 / 6 / 7", MP.enabled ? MP.room : "布板", MP.enabled ? palette.brass : state.navigatorCooldown <= 0 ? palette.brass : palette.gray]
       ];
     let cx = x + 18;
     for (const [key, label, color] of items) {
@@ -1296,7 +1296,7 @@
   }
 
   function canNavigatorControl() {
-    return MP.enabled && (MP.role === "navigator" || MP.role === "versus");
+    return !MP.enabled || MP.role === "navigator" || MP.role === "versus";
   }
 
   function canHelmControl() {
@@ -1862,8 +1862,8 @@
     ctx.globalAlpha = 0.92;
     rect(x, y, w, h, "#111c20", palette.black, 2);
     ctx.globalAlpha = 1;
-    text(MP.enabled ? `联机 ${MP.role === "helm" ? "掌舵手" : "航海士"} · ${MP.room}` : "单人航行", x + 10, y + 8, 12, palette.foam, "left");
-    text(MP.enabled ? MP.status : "掌舵模式", x + w - 10, y + 8, 10, MP.connected ? palette.blue : palette.brass, "right");
+    text(MP.enabled ? `联机 ${MP.role === "helm" ? "掌舵手" : "航海士"} · ${MP.room}` : "单机布场", x + 10, y + 8, 12, palette.foam, "left");
+    text(MP.enabled ? MP.status : "4-7 放置木板", x + w - 10, y + 8, 10, MP.connected ? palette.blue : palette.brass, "right");
 
     if (MP.enabled) {
       const helmReady = MP.ready.helm ? "掌舵 已备" : "掌舵 待命";
