@@ -1447,11 +1447,158 @@
     return true;
   }
 
+  function boardMountAngle(angle) {
+    let a = angle;
+    while (a > Math.PI / 2) a -= Math.PI;
+    while (a < -Math.PI / 2) a += Math.PI;
+    return a;
+  }
+
+  function boardMountAngleDiff(a, b) {
+    return Math.abs(boardMountAngle(a - b));
+  }
+
+  function canUsePinAsBoardMount(p, card) {
+    if (!p || p.broken || !p.anchorable) return false;
+    if (p.kind === "pin" || p.kind === "brass" || p.kind === "tide") return true;
+    return p.kind === "anchor" && (card.key === "guard" || card.key === "block");
+  }
+
+  function boardMountGoal(card, x, y, angle) {
+    const goal = {
+      x,
+      y,
+      angle,
+      idealSpan: Math.max(72, card.w - 18),
+      radius: 230,
+      angleWeight: 0.6,
+      angleTolerance: 0.62
+    };
+    if (card.key === "guard") {
+      goal.angle = 0;
+      goal.idealSpan = 112;
+      goal.radius = 260;
+      goal.angleWeight = 0.95;
+      goal.angleTolerance = 0.38;
+    } else if (card.key === "ramp") {
+      goal.idealSpan = 96;
+      goal.radius = 235;
+      goal.angleWeight = 0.9;
+      goal.angleTolerance = 0.5;
+    } else if (card.key === "blast") {
+      goal.angle = null;
+      goal.idealSpan = 82;
+      goal.radius = 250;
+      goal.angleWeight = 0.15;
+    } else if (card.key === "block") {
+      goal.angle = 0;
+      goal.idealSpan = 90;
+      goal.radius = 260;
+      goal.angleWeight = 0.75;
+      goal.angleTolerance = 0.48;
+    }
+    return goal;
+  }
+
+  function boardMountConflict(p1, p2, x, y, angle) {
+    const a = Math.min(p1.id, p2.id);
+    const b = Math.max(p1.id, p2.id);
+    const placed = driftBoards.concat(boardPreviews);
+    for (const bd of placed) {
+      if (bd.broken) continue;
+      const ba = Math.min(bd.pinAId ?? -1, bd.pinBId ?? -2);
+      const bb = Math.max(bd.pinAId ?? -1, bd.pinBId ?? -2);
+      if (ba === a && bb === b) return true;
+      if (dist(x, y, bd.x, bd.y) < 48 && boardMountAngleDiff(angle, bd.angle || 0) < 0.38) return true;
+    }
+    return false;
+  }
+
+  function boardMountClearanceOk(card, p1, p2, x, y, angle, w, h) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const ex = Math.abs(c) * w * 0.5 + Math.abs(s) * h * 0.5 + 10;
+    const ey = Math.abs(s) * w * 0.5 + Math.abs(c) * h * 0.5 + 10;
+    if (x - ex < FIELD.x + 18 || x + ex > FIELD.r - 104) return false;
+    if (y - ey < FIELD.y + 96 || y + ey > FIELD.b - 74) return false;
+    if (!ball.dead && pointSegmentDistance(ball.x, ball.y, p1.x, p1.y, p2.x, p2.y) < ball.r + h + 20) return false;
+    for (const b of bumpers) {
+      if (pointSegmentDistance(b.x, b.y, p1.x, p1.y, p2.x, p2.y) < b.r + 18) return false;
+    }
+    for (const p of pockets) {
+      const clear = card.key === "block" ? p.r + 14 : p.r + 24;
+      if (dist(x, y, p.x, p.y) < clear) return false;
+    }
+    return true;
+  }
+
+  function scoreBoardMountPair(card, p1, p2, goal) {
+    const span = dist(p1.x, p1.y, p2.x, p2.y);
+    const minSpan = Math.max(54, card.w * (card.key === "blast" ? 0.72 : 0.62));
+    const maxSpan = card.w + (card.key === "guard" ? 26 : card.key === "block" ? 24 : 20);
+    if (span < minSpan || span > maxSpan) return null;
+
+    const x = (p1.x + p2.x) * 0.5;
+    const y = (p1.y + p2.y) * 0.5;
+    const angle = boardMountAngle(Math.atan2(p2.y - p1.y, p2.x - p1.x));
+    const w = Math.round(clamp(span + 18, card.w, maxSpan));
+    if (boardMountConflict(p1, p2, x, y, angle)) return null;
+    if (!boardMountClearanceOk(card, p1, p2, x, y, angle, w, card.h)) return null;
+
+    const spanScore = 1 - clamp(Math.abs(span - goal.idealSpan) / 54, 0, 1);
+    const targetScore = 1 - clamp(dist(x, y, goal.x, goal.y) / goal.radius, 0, 1);
+    let score = spanScore * 0.85 + targetScore * 1.25;
+
+    if (goal.angle !== null) {
+      const angleScore = 1 - clamp(boardMountAngleDiff(angle, goal.angle) / goal.angleTolerance, 0, 1);
+      score += angleScore * goal.angleWeight;
+    }
+    if (card.key === "guard") {
+      score += clamp((y - (FIELD.b - 260)) / 190, 0, 1) * 0.5;
+      score += (1 - clamp(Math.abs(angle) / 0.36, 0, 1)) * 0.35;
+    } else if (card.key === "ramp") {
+      score += (1 - clamp(Math.abs(Math.abs(angle) - 0.43) / 0.38, 0, 1)) * 0.45;
+    } else if (card.key === "blast") {
+      score += (y > FIELD.y + 165 && y < FIELD.b - 165 ? 0.35 : 0);
+    } else if (card.key === "block") {
+      score += clamp((y - (FIELD.b - 260)) / 190, 0, 1) * 0.6;
+      score += (1 - clamp(Math.abs(angle) / 0.46, 0, 1)) * 0.45;
+    }
+    if (p1.kind === "brass" || p2.kind === "brass") score += 0.08;
+    if (p1.kind === "tide" || p2.kind === "tide") score += 0.06;
+    if (p1.kind === "anchor" || p2.kind === "anchor") score += card.key === "block" ? 0.05 : -0.08;
+    score += hash2(p1.id, p2.id, state.boardSeq) * 0.035;
+
+    return { p1, p2, x, y, angle, w, span, score };
+  }
+
+  function findBoardMountPair(card, goal) {
+    const mountPins = pins.filter(p => canUsePinAsBoardMount(p, card));
+    let best = null;
+    for (let i = 0; i < mountPins.length; i++) {
+      for (let j = i + 1; j < mountPins.length; j++) {
+        const candidate = scoreBoardMountPair(card, mountPins[i], mountPins[j], goal);
+        if (candidate && (!best || candidate.score > best.score)) best = candidate;
+      }
+    }
+    return best && best.score > 0.42 ? best : null;
+  }
+
+  function boardMountWorldPoints(b) {
+    if (b.mountA && b.mountB) return [b.mountA, b.mountB];
+    if (!b.mountSpan) return [];
+    const dx = Math.cos(b.angle) * b.mountSpan * 0.5;
+    const dy = Math.sin(b.angle) * b.mountSpan * 0.5;
+    return [{ x: b.x - dx, y: b.y - dy }, { x: b.x + dx, y: b.y + dy }];
+  }
+
   function makeBoardSpec(card) {
     const margin = 50;
     let x = clamp(ball.dead ? FIELD.x + FIELD.w * 0.5 : ball.x, FIELD.x + margin, FIELD.r - margin);
     let y = clamp(ball.dead ? FIELD.b - 128 : ball.y + 72, FIELD.y + 145, FIELD.b - 104);
     let angle = 0;
+    let w = card.w;
+    let h = card.h;
 
     if (card.key === "guard") {
       x = clamp(ball.dead ? FIELD.x + FIELD.w * 0.5 : ball.x + Math.sign(ball.vx || 1) * 32, FIELD.x + 110, FIELD.r - 150);
@@ -1479,14 +1626,30 @@
       y = clamp(y - 62, FIELD.y + 130, FIELD.b - 118);
     }
 
+    const mount = findBoardMountPair(card, boardMountGoal(card, x, y, angle));
+    const mountData = mount ? {
+      pinAId: mount.p1.id,
+      pinBId: mount.p2.id,
+      mountSpan: mount.span,
+      mountA: { x: mount.p1.x, y: mount.p1.y, kind: mount.p1.kind },
+      mountB: { x: mount.p2.x, y: mount.p2.y, kind: mount.p2.kind },
+      mountScore: mount.score
+    } : {};
+    if (mount) {
+      x = mount.x;
+      y = mount.y;
+      angle = mount.angle;
+      w = mount.w;
+    }
+
     return {
       id: ++state.boardSeq,
       kind: card.key,
       label: card.label,
       x,
       y,
-      w: card.w,
-      h: card.h,
+      w,
+      h,
       angle,
       hp: card.hp,
       maxHp: card.hp,
@@ -1504,7 +1667,8 @@
       expiring: false,
       pulse: 0,
       broken: false,
-      owner: MP.enabled ? MP.role : "local"
+      owner: MP.enabled ? MP.role : "local",
+      ...mountData
     };
   }
 
@@ -1795,6 +1959,7 @@
     for (const b of boardPreviews) {
       const t = 1 - b.previewLife / Math.max(0.001, b.maxPreviewLife || BOARD_SPAWN_WARNING);
       ctx.save();
+      drawBoardMountHardware(b, b.accent, true);
       ctx.translate(b.x, b.y);
       ctx.rotate(b.angle);
       ctx.globalAlpha = 0.18 + 0.2 * Math.sin(t * Math.PI);
@@ -1860,16 +2025,36 @@
     }
   }
 
+  function drawBoardMountHardware(b, color, preview = false) {
+    const mounts = boardMountWorldPoints(b);
+    if (mounts.length !== 2) return;
+    ctx.save();
+    ctx.globalAlpha = preview ? 0.42 : 1;
+    line(mounts[0].x, mounts[0].y, mounts[1].x, mounts[1].y, preview ? palette.foam : "#5b3a24", preview ? 2 : 3);
+    for (const m of mounts) {
+      px(m.x - 7, m.y - 7, 14, 14, preview ? "rgba(246,247,238,0.42)" : "#2a1a12");
+      px(m.x - 4, m.y - 4, 8, 8, preview ? color : palette.brass);
+      px(m.x - 2, m.y - 2, 4, 4, palette.black);
+      if (!preview) {
+        px(m.x - 9, m.y - 2, 4, 4, color);
+        px(m.x + 5, m.y - 2, 4, 4, color);
+      }
+    }
+    ctx.restore();
+  }
+
   function drawBoard(b) {
     const lifePct = clamp(b.expiresIn / Math.max(0.001, b.maxLife), 0, 1);
     const cracked = b.crackCount >= b.crackAt;
     const critical = b.crackCount >= b.breakAt - 1;
+    const flash = b.pulse > 0 ? Math.sin(b.pulse * 42) * 0.5 + 0.5 : 0;
+    const fill = cracked ? "#7a4f37" : b.color;
+
+    drawBoardMountHardware(b, critical ? palette.brass : b.accent);
+
     ctx.save();
     ctx.translate(Math.round(b.x), Math.round(b.y));
     ctx.rotate(b.angle);
-
-    const flash = b.pulse > 0 ? Math.sin(b.pulse * 42) * 0.5 + 0.5 : 0;
-    const fill = cracked ? "#7a4f37" : b.color;
     drawBoardPixelHull(b, fill, critical ? palette.brass : palette.black);
     drawBoardPixelDetails(b, cracked, critical);
 
@@ -4812,8 +4997,10 @@
     boardCards: BOARD_CARDS,
     state,
     ball,
+    pins,
     boards: driftBoards,
     previews: boardPreviews,
+    boardMountWorldPoints,
     makeBoard(kind, overrides = {}) {
       const card = BOARD_CARDS[kind];
       if (!card) throw new Error(`unknown board kind: ${kind}`);

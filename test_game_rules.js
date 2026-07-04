@@ -215,6 +215,21 @@ assert(game.state.navigatorMaterial < soloMaterialBefore, "solo board placement 
 assert(game.state.navigatorCooldown > 0, "solo board placement should start the shared board cooldown");
 keyUp("Digit4");
 
+for (const kind of ["guard", "ramp", "blast", "block"]) {
+  resetClean();
+  const placed = game.playCard(kind);
+  assert.strictEqual(placed, true, `${kind} card should place a board preview`);
+  const preview = game.previews[0];
+  assert(Number.isInteger(preview.pinAId) && Number.isInteger(preview.pinBId), `${kind} board should mount between two pins`);
+  const mountA = game.pins.find(p => p.id === preview.pinAId);
+  const mountB = game.pins.find(p => p.id === preview.pinBId);
+  assert(mountA && mountB, `${kind} mount pins should exist`);
+  assert(Math.abs(preview.x - (mountA.x + mountB.x) / 2) < 0.001, `${kind} board x should sit at the pin midpoint`);
+  assert(Math.abs(preview.y - (mountA.y + mountB.y) / 2) < 0.001, `${kind} board y should sit at the pin midpoint`);
+  assert(Math.abs(preview.mountSpan - Math.hypot(mountA.x - mountB.x, mountA.y - mountB.y)) < 0.001, `${kind} board should store its pin span`);
+  assert(game.boardMountWorldPoints(preview).length === 2, `${kind} board should expose mount hardware points`);
+}
+
 resetIntroReady("helm", true);
 keyDown("Digit4");
 assert.strictEqual(game.previews.length, 0, "network helm should not place local boards with navigator hotkeys");
