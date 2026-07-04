@@ -53,8 +53,11 @@ const elements = {
   relayInput: makeElement(""),
   roomLinks: makeElement(),
   soloBtn: makeElement(),
+  autoBtn: makeElement(),
   helmBtn: makeElement(),
-  navigatorBtn: makeElement()
+  navigatorBtn: makeElement(),
+  newRoomBtn: makeElement(),
+  copyInviteBtn: makeElement()
 };
 
 global.window = global;
@@ -75,6 +78,14 @@ new Function(scriptMatch[1])();
 
 const game = global.__anchorProtoTest;
 assert(game, "test API should be exposed");
+
+assert.strictEqual(game.sanitizeRoom(" Sea Room!! 42 "), "Sea-Room-42", "room codes should be URL-safe and shareable");
+assert.match(game.generateRoomCode(), /^SEA-\d{4}$/, "generated room codes should be short and readable");
+assert(game.modeUrl("auto", "SEA-1234").includes("role=auto"), "auto invite URL should carry the auto role");
+game.setRole("auto", true);
+game.applyRoomState({ type: "joined", room: "SEA-1234", role: "navigator", count: 2, roles: { helm: 1, navigator: 1 }, ready: {}, readyAll: false });
+assert.strictEqual(game.mp.role, "navigator", "client should adopt the server-assigned auto role");
+game.setRole("solo", false);
 
 function resetClean() {
   game.reset();

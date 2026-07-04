@@ -9,8 +9,11 @@
   const relayInput = document.getElementById("relayInput");
   const roomLinks = document.getElementById("roomLinks");
   const soloBtn = document.getElementById("soloBtn");
+  const autoBtn = document.getElementById("autoBtn");
   const helmBtn = document.getElementById("helmBtn");
   const navigatorBtn = document.getElementById("navigatorBtn");
+  const newRoomBtn = document.getElementById("newRoomBtn");
+  const copyInviteBtn = document.getElementById("copyInviteBtn");
 
   const W = canvas.width;
   const H = canvas.height;
@@ -2164,14 +2167,17 @@
   }
 
   function applyRoomState(msg) {
+    if (msg.role && ["helm", "navigator", "versus"].includes(msg.role)) MP.role = msg.role;
+    if (msg.room) MP.room = sanitizeRoom(msg.room) || MP.room;
     MP.peers = msg.count || 0;
     MP.roles = msg.roles || {};
     MP.ready = msg.ready || {};
     MP.readyAll = !!msg.readyAll;
     state.netPeers = MP.peers;
-    const helm = MP.roles.helm ? "掌舵在线" : "等掌舵";
-    const nav = MP.roles.navigator ? "航海士在线" : "等航海士";
-    MP.status = `${helm} · ${nav}`;
+    const helm = MP.roles.helm ? "掌舵在线" : (MP.role === "helm" ? "等航海士" : "等掌舵");
+    const nav = MP.roles.navigator ? "航海士在线" : (MP.role === "navigator" ? "等掌舵" : "等航海士");
+    const roleName = MP.role === "helm" ? "你是掌舵" : MP.role === "navigator" ? "你是航海士" : "联机";
+    MP.status = `${roleName} · ${helm} · ${nav}`;
   }
 
   function toggleReady() {
@@ -2181,8 +2187,19 @@
     setMessage(MP.readyLocal ? "已准备" : "取消准备", 0.55);
   }
 
+  function generateRoomCode() {
+    return `SEA-${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
+  function ensureRoomCode() {
+    const existing = sanitizeRoom(roomInput?.value || "");
+    const room = existing || generateRoomCode();
+    if (roomInput) roomInput.value = room;
+    return room;
+  }
+
   function sanitizeRoom(value) {
-    return String(value || "test").trim().replace(/[^\w-]/g, "-").slice(0, 32) || "test";
+    return String(value || "").trim().replace(/[^\w-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
   }
 
   function normalizeRelayUrl(value) {
@@ -2196,7 +2213,7 @@
 
   function modeUrl(role, room = roomInput?.value) {
     const params = new URLSearchParams();
-    params.set("room", sanitizeRoom(room));
+    params.set("room", sanitizeRoom(room) || generateRoomCode());
     params.set("role", role);
     const relay = normalizeRelayUrl(relayInput?.value);
     if (relay) params.set("relay", relay);
@@ -2205,9 +2222,9 @@
 
   function updateRoomLinks() {
     if (!roomLinks) return;
-    const room = sanitizeRoom(roomInput?.value);
+    const room = ensureRoomCode();
     const relay = normalizeRelayUrl(relayInput?.value) || "当前域名 /ws";
-    roomLinks.textContent = `中继 ${relay}  ·  掌舵手 ${modeUrl("helm", room)}  ·  航海士 ${modeUrl("navigator", room)}`;
+    roomLinks.textContent = `房间 ${room} · 中继 ${relay} · 自动 ${modeUrl("auto", room)} · 掌舵 ${modeUrl("helm", room)} · 航海士 ${modeUrl("navigator", room)}`;
   }
 
   function hideModeMenu() {
@@ -2222,6 +2239,7 @@
 
   function bindModeMenu() {
     if (!modeMenu) return;
+    if (roomInput && !sanitizeRoom(roomInput.value)) roomInput.value = generateRoomCode();
     soloBtn?.addEventListener("click", () => {
       MP.enabled = false;
       MP.role = "helm";
@@ -2231,14 +2249,32 @@
       hideModeMenu();
       resetRun();
     });
+    autoBtn?.addEventListener("click", () => {
+      location.href = modeUrl("auto", ensureRoomCode());
+    });
     helmBtn?.addEventListener("click", () => {
-      location.href = modeUrl("helm");
+      location.href = modeUrl("helm", ensureRoomCode());
     });
     navigatorBtn?.addEventListener("click", () => {
-      location.href = modeUrl("navigator");
+      location.href = modeUrl("navigator", ensureRoomCode());
+    });
+    newRoomBtn?.addEventListener("click", () => {
+      if (roomInput) roomInput.value = generateRoomCode();
+      updateRoomLinks();
+    });
+    copyInviteBtn?.addEventListener("click", async () => {
+      const url = new URL(modeUrl("auto", ensureRoomCode()), location.href).href;
+      try {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
+        setMessage("已复制自动加入链接", 0.8);
+        if (roomLinks) roomLinks.textContent = `已复制：${url}`;
+      } catch (_) {
+        if (roomLinks) roomLinks.textContent = `自动加入链接：${url}`;
+      }
     });
     roomInput?.addEventListener("input", updateRoomLinks);
     relayInput?.addEventListener("input", updateRoomLinks);
+    updateRoomLinks();
   }
 
   function initNetworkFromQuery() {
@@ -2247,7 +2283,7 @@
     const role = params.get("role");
     MP.relayUrl = normalizeRelayUrl(params.get("relay"));
     if (relayInput && MP.relayUrl) relayInput.value = MP.relayUrl;
-    if (!room || !["helm", "navigator", "versus"].includes(role || "")) {
+    if (!room || !["auto", "helm", "navigator", "versus"].includes(role || "")) {
       MP.enabled = false;
       MP.status = "单人航行";
       state.netStatus = "单人航行";
@@ -2273,7 +2309,6 @@
         MP.status = "已连接";
         state.netStatus = "已连接";
         sendNet({ type: "join" });
-        if (MP.role !== "helm") sendNet({ type: "request_snapshot" });
       });
       MP.ws.addEventListener("close", () => {
         MP.connected = false;
@@ -2284,7 +2319,13 @@
         let msg;
         try { msg = JSON.parse(event.data); } catch (_) { return; }
         if (msg.type === "joined" || msg.type === "room_state" || msg.type === "peers") {
+          const beforeRole = MP.role;
           applyRoomState(msg);
+          if (msg.type === "joined") {
+            setMessage(MP.role === "helm" ? "已分配：掌舵手" : MP.role === "navigator" ? "已分配：航海士" : "已进入房间", 0.9);
+            if (MP.role !== "helm") sendNet({ type: "request_snapshot" });
+            if (beforeRole === "auto") updateRoomLinks();
+          }
         } else if (msg.type === "play_card" && MP.role === "helm") {
           playNavigatorCard(msg.kind, msg.cardId || "remote");
         } else if (msg.type === "card_status" && (MP.role === "navigator" || MP.role === "versus")) {
@@ -4970,6 +5011,9 @@
     snapshot: snapshotGame,
     applyRoomState,
     applyNetworkSnapshotMessage,
+    sanitizeRoom,
+    generateRoomCode,
+    modeUrl,
     sentMessages() {
       return MP.ws && Array.isArray(MP.ws.sent) ? MP.ws.sent.map(raw => JSON.parse(raw)) : [];
     },

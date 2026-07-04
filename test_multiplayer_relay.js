@@ -81,6 +81,18 @@ async function waitFor(ws, predicate, label) {
   try {
     await waitForServer();
     await assertBlockedOrigin();
+    const autoHelm = await connect("auto", "auto-role-test");
+    const autoNavigator = await connect("auto", "auto-role-test");
+    const autoHelmJoin = await waitFor(autoHelm, m => m.type === "joined", "auto helm joined");
+    const autoNavigatorJoin = await waitFor(autoNavigator, m => m.type === "joined", "auto navigator joined");
+    assert.strictEqual(autoHelmJoin.role, "helm", "first auto player should become helm");
+    assert.strictEqual(autoNavigatorJoin.role, "navigator", "second auto player should become navigator");
+    autoHelm.send(JSON.stringify({ type: "ready", ready: true }));
+    autoNavigator.send(JSON.stringify({ type: "ready", ready: true }));
+    await waitFor(autoHelm, m => m.type === "room_state" && m.readyAll, "auto ready room_state");
+    autoHelm.close();
+    autoNavigator.close();
+
     const helm = await connect("helm");
     const navigator = await connect("navigator");
 

@@ -122,6 +122,27 @@ function validRole(role) {
   return ["helm", "navigator", "versus"].includes(role);
 }
 
+function sanitizeRoom(value) {
+  const room = String(value || "")
+    .trim()
+    .replace(/[^\w-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 64);
+  return room || "default";
+}
+
+function assignRole(room, requestedRole) {
+  if (validRole(requestedRole)) return requestedRole;
+  if (requestedRole !== "auto") return "unknown";
+  const summary = roomSummary(room);
+  const helmCount = summary.roles.helm || 0;
+  const navigatorCount = summary.roles.navigator || 0;
+  if (!helmCount) return "helm";
+  if (!navigatorCount) return "navigator";
+  return helmCount <= navigatorCount ? "helm" : "navigator";
+}
+
 function validCardKind(kind) {
   return ["guard", "ramp", "blast", "block"].includes(kind);
 }
@@ -136,12 +157,12 @@ wss.on("connection", ws => {
     try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
 
     if (msg.type === "join") {
-      const roomId = String(msg.room || "default").slice(0, 64);
+      const roomId = sanitizeRoom(msg.room);
       const requestedRole = String(msg.role || "unknown").slice(0, 32);
-      ws.role = validRole(requestedRole) ? requestedRole : "unknown";
       ws.room = roomId;
       ws.ready = false;
       const room = getRoom(roomId);
+      ws.role = assignRole(room, requestedRole);
       room.clients.add(ws);
       send(ws, { type: "joined", room: roomId, role: ws.role, ...roomSummary(room) });
       if (room.latestSnapshot && ws.role !== "helm") {
