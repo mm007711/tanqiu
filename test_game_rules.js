@@ -215,6 +215,17 @@ assert(game.state.navigatorMaterial < soloMaterialBefore, "solo board placement 
 assert(game.state.navigatorCooldown > 0, "solo board placement should start the shared board cooldown");
 keyUp("Digit4");
 
+resetClean();
+assert.strictEqual(game.boardPlacementStatus().ok, true, "solo board placement should be available with material, no cooldown, and room");
+game.state.navigatorCooldown = 1.2;
+assert.strictEqual(game.boardPlacementStatus().ok, false, "solo board placement should be blocked during cooldown");
+game.state.navigatorCooldown = 0;
+game.state.navigatorMaterial = 1;
+assert.strictEqual(game.boardPlacementStatus(game.boardCards.guard).ok, false, "solo board placement should be blocked when material is too low for the selected card");
+game.state.navigatorMaterial = 8;
+for (let i = 0; i < game.constants.boardLimit; i++) game.makeBoard("guard", { x: 220 + i * 90, y: 330 });
+assert.strictEqual(game.boardPlacementStatus().ok, false, "solo board placement should be blocked when the board limit is full");
+
 for (const kind of ["guard", "ramp", "blast", "block"]) {
   resetClean();
   const placed = game.playCard(kind);

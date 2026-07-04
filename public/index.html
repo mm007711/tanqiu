@@ -1277,6 +1277,56 @@
     if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
   }
 
+  function addDirectionalParticles(x, y, count, angle, spread = 0.55, speed = 120, color = palette.foam, size = 3) {
+    for (let i = 0; i < count; i++) {
+      const a = angle + rnd(-spread, spread);
+      const s = rnd(speed * 0.35, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        color,
+        size: rnd(size * 0.6, size),
+        life: rnd(0.24, 0.68),
+        max: 0.68
+      });
+    }
+    if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
+  }
+
+  function addBoardMountBurst(b) {
+    const mounts = boardMountWorldPoints(b);
+    addRing(b.x, b.y, Math.max(b.w, b.h) * 0.42, b.accent, 0.22);
+    addWaterRipple(b.x, b.y, 0.9);
+    addDirectionalParticles(b.x, b.y, 8, b.angle, 0.7, 120, "#b78951", 2.5);
+    for (const m of mounts) {
+      addRing(m.x, m.y, 20, b.accent, 0.24);
+      addParticles(m.x, m.y, 7, 105, palette.brass, 2.4);
+      addWaterRipple(m.x, m.y, 0.42);
+    }
+  }
+
+  function addBoardBreakBurst(b, source = "ball") {
+    const mounts = boardMountWorldPoints(b);
+    const heavy = source === "heavy" || b.kind === "blast";
+    const count = heavy ? 6 : 5;
+    for (let i = 0; i < count; i++) {
+      const t = count === 1 ? 0.5 : i / (count - 1);
+      const lx = lerp(-b.w * 0.45, b.w * 0.45, t);
+      const p = boardWorldVec(b, lx, rnd(-b.h * 0.25, b.h * 0.25));
+      const px2 = b.x + p.x;
+      const py2 = b.y + p.y;
+      addDirectionalParticles(px2, py2, heavy ? 7 : 5, b.angle + (i % 2 ? Math.PI / 2 : -Math.PI / 2), 0.85, heavy ? 220 : 165, i % 2 ? b.accent : "#b78951", heavy ? 3.3 : 2.8);
+    }
+    for (const m of mounts) {
+      addParticles(m.x, m.y, heavy ? 12 : 8, heavy ? 190 : 130, palette.brass, 2.7);
+      addRing(m.x, m.y, heavy ? 30 : 22, b.accent, 0.32);
+    }
+    addRing(b.x, b.y, Math.max(b.w, b.h) * (heavy ? 0.72 : 0.58), b.accent, heavy ? 0.5 : 0.38);
+    if (heavy) addRing(b.x, b.y, Math.max(b.w, b.h) * 0.95, palette.coral, 0.42);
+  }
+
   function setMessage(s, time = 1.1) {
     state.message = s;
     state.messageTimer = time;
@@ -1341,6 +1391,16 @@
 
   function availableBoardCount() {
     return driftBoards.filter(b => !b.broken).length + boardPreviews.length;
+  }
+
+  function boardPlacementStatus(card = null) {
+    if (state.gameOver) return { ok: false, label: "航程结束", color: palette.gray };
+    if (state.navigatorCooldown > 0) return { ok: false, label: `冷却 ${state.navigatorCooldown.toFixed(1)}s`, color: palette.gray };
+    if (availableBoardCount() >= BOARD_LIMIT) return { ok: false, label: "航障已满", color: palette.coral };
+    if (card && state.navigatorMaterial < card.cost) return { ok: false, label: `${resourceLabel()}不足`, color: palette.gray };
+    const cheapest = Math.min(...Object.values(BOARD_CARDS).map(c => c.cost));
+    if (!card && state.navigatorMaterial < cheapest) return { ok: false, label: `${resourceLabel()}不足`, color: palette.gray };
+    return { ok: true, label: "可挂板 4-7", color: palette.blue };
   }
 
   function boardCardName(card) {
@@ -1435,8 +1495,8 @@
       cardName: boardCardName(card)
     });
 
-    setMessage(`${boardCardName(card)}：${card.hint}`, 1.05);
-    addFloat(boardCardName(card), spec.x, spec.y - 42, card.accent, 15, -24);
+    setMessage(`${boardCardName(card)}：挂到钉点，${card.hint}`, 1.05);
+    addFloat(spec.mountSpan ? "钉点预挂" : boardCardName(card), spec.x, spec.y - 42, card.accent, 15, -24);
     addRing(spec.x, spec.y, Math.max(card.w, card.h) * 0.45, card.accent, 0.24);
     beep(360 + card.cost * 90, 0.045, 0.02, "square");
     sendNet({ type: "event", event: "card_accepted", kind, material: state.navigatorMaterial });
@@ -1679,8 +1739,9 @@
     delete board.cardName;
     driftBoards.push(board);
     if (driftBoards.length > BOARD_LIMIT) driftBoards.shift();
-    addParticles(board.x, board.y, 14, 95, board.accent, 2.4);
-    addRing(board.x, board.y, Math.max(board.w, board.h) * 0.46, board.accent, 0.28);
+    addBoardMountBurst(board);
+    addFloat("挂板锁定", board.x, board.y - 38, board.accent, 14, -24);
+    beep(520, 0.04, 0.018, "square");
   }
 
   function updateBoardSystem(dt) {
@@ -1919,9 +1980,9 @@
     }
 
     addFloat("压裂击碎！", b.x, b.y - 48, palette.brass, 22, -36);
-    addParticles(b.x, b.y, b.kind === "blast" ? 38 : 24, b.kind === "blast" ? 210 : 150, b.accent, 3.2);
-    addParticles(b.x, b.y, 18, 180, "#b78951", 2.6);
-    addRing(b.x, b.y, Math.max(b.w, b.h) * 0.56, b.accent, 0.42);
+    addBoardBreakBurst(b, source);
+    addParticles(b.x, b.y, b.kind === "blast" ? 24 : 12, b.kind === "blast" ? 210 : 150, b.accent, 3.2);
+    addParticles(b.x, b.y, 12, 180, "#b78951", 2.6);
     addWaterRipple(b.x, b.y, b.kind === "blast" ? 1.8 : 1.25);
     state.shake = Math.max(state.shake, b.kind === "blast" ? 14 : 8);
     beep(b.kind === "blast" ? 160 : 260, 0.11, 0.038, "triangle");
@@ -2103,9 +2164,17 @@
     px(x + 92, infoY + 4, w - 104, 8, "#344145");
     px(x + 92, infoY + 4, Math.round((w - 104) * pct), 8, palette.brass);
 
-    const cd = state.navigatorCooldown > 0 ? `冷却 ${state.navigatorCooldown.toFixed(1)}s` : "可布场";
-    text(cd, x + 10, infoY + 20, 11, state.navigatorCooldown > 0 ? palette.gray : palette.blue, "left");
+    const placementStatus = boardPlacementStatus();
+    const cd = MP.enabled ? (state.navigatorCooldown > 0 ? `冷却 ${state.navigatorCooldown.toFixed(1)}s` : "可布场") : placementStatus.label;
+    text(cd, x + 10, infoY + 20, 11, MP.enabled ? (state.navigatorCooldown > 0 ? palette.gray : palette.blue) : placementStatus.color, "left");
     text(`航障 ${availableBoardCount()}/${BOARD_LIMIT}`, x + w - 10, infoY + 20, 11, palette.foam, "right");
+    if (!MP.enabled) {
+      const statusY = infoY + 32;
+      const statusW = w - 20;
+      rect(x + 10, statusY, statusW, 8, "#243337", palette.black, 1);
+      const fillW = placementStatus.ok ? statusW : Math.round(statusW * clamp(1 - state.navigatorCooldown / 2.0, 0, 1));
+      px(x + 10, statusY, fillW, 8, placementStatus.color);
+    }
 
     const cards = [
       ["4", BOARD_CARDS.guard],
@@ -2115,8 +2184,14 @@
     ];
     let cx = x + 10;
     for (const [key, card] of cards) {
-      const affordable = state.navigatorMaterial >= card.cost && state.navigatorCooldown <= 0 && availableBoardCount() < BOARD_LIMIT;
+      const cardStatus = boardPlacementStatus(card);
+      const affordable = cardStatus.ok;
       rect(cx, infoY + 42, 52, 26, affordable ? "#22343a" : "#182226", affordable ? card.accent : "#3d4a4e", 1);
+      if (affordable && !MP.enabled) {
+        ctx.globalAlpha = 0.16 + 0.1 * Math.sin(state.phase * 5 + Number(key));
+        rect(cx + 3, infoY + 45, 46, 20, card.accent, null, 1);
+        ctx.globalAlpha = 1;
+      }
       text(key, cx + 5, infoY + 48, 11, palette.foam, "left");
       text(`${card.cost}`, cx + 44, infoY + 48, 10, palette.brass, "right");
       text(card.coopName.slice(0, 2), cx + 24, infoY + 48, 11, affordable ? card.accent : palette.gray, "center");
@@ -5001,6 +5076,7 @@
     boards: driftBoards,
     previews: boardPreviews,
     boardMountWorldPoints,
+    boardPlacementStatus,
     makeBoard(kind, overrides = {}) {
       const card = BOARD_CARDS[kind];
       if (!card) throw new Error(`unknown board kind: ${kind}`);
